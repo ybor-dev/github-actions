@@ -33,13 +33,13 @@ jobs:
               {
                 "id": "central",
                 "name":  "${{ github.repository_owner }}-libs-release",
-                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "url": "https://ybor.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
                 "snapshots": { "enabled": "false" }
               },
               {
                 "id": "snapshots",
                 "name":  "${{ github.repository_owner }}-libs-snapshot",
-                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://ybor.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
                 "snapshots": { "enabled": "true" }
               }
             ]
@@ -48,13 +48,13 @@ jobs:
               {
                 "id": "central",
                 "name":  "${{ github.repository_owner }}-libs-release",
-                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "url": "https://ybor.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
                 "snapshots": { "enabled": "false" }
               },
               {
                 "id": "snapshots",
                 "name":  "${{ github.repository_owner }}-libs-snapshot",
-                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://ybor.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
                 "snapshots": { "enabled": "true" }
               }
             ]

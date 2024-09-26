@@ -120,7 +120,7 @@ jobs:
       - name: E2E Tests DEV
         if: ${{ env.ENV == 'dev' && env.SPECS =='' }}
         env:
-          CYPRESS_BASE_URL: 'https://webapp.us-west-2.dev.watercolor.naxgrp.com/'
+          CYPRESS_BASE_URL: 'https://webapp.us-west-2.dev.hello-world.ybor.ai/'
           CYPRESS_ENVIRONMENT: 'dev'
         run: |
           RUN=CI pnpm nx e2e-parallel $APP
@@ -128,7 +128,7 @@ jobs:
       - name: E2E Tests QA
         if: ${{ env.ENV == 'qa' && env.SPECS =='' }}
         env:
-          CYPRESS_BASE_URL: 'https://webapp.us-west-2.stg.watercolor.naxgrp.com/'
+          CYPRESS_BASE_URL: 'https://webapp.us-west-2.stg.hello-world.ybor.ai/'
           CYPRESS_ENVIRONMENT: 'qa'
         run: |
           RUN=CI pnpm nx e2e-parallel $APP
@@ -136,7 +136,7 @@ jobs:
       - name: E2E Tests PROD
         if: ${{ env.ENV == 'prod' && env.SPECS =='' }}
         env:
-          CYPRESS_BASE_URL: 'https://webapp.us-west-2.prd.watercolor.naxgrp.com/'
+          CYPRESS_BASE_URL: 'https://webapp.us-west-2.prd.hello-world.ybor.ai/'
           CYPRESS_ENVIRONMENT: 'prod'
         run: |
           RUN=CI pnpm nx e2e-parallel $APP
@@ -176,8 +176,8 @@ jobs:
         run: |
           pip install trcli
           trcli -n \
-            -h https://naxgrp.testrail.io/ \
-            --project "naxa-watercolor" \
+            -h https://ybor.testrail.io/ \
+            --project "ybor-hello-world" \
             --username ${{ secrets.TESTRAIL_USERNAME }} \
             --password ${{ secrets.TESTRAIL_PASSWORD }} \
             parse_junit \

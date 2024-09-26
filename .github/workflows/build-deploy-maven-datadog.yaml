@@ -34,14 +34,14 @@ jobs:
               {
                 "id": "central",
                 "name":  "${{ github.repository_owner }}-libs-release",
-                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "url": "https://ybor.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
                 "snapshots": { "enabled": "false" },
                 "releases": { "enabled": "true" }
               },
               {
                 "id": "snapshots",
                 "name":  "${{ github.repository_owner }}-libs-snapshot",
-                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://ybor.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
                 "snapshots": { "enabled": "true" },
                 "releases": { "enabled": "false" }
               }
@@ -51,14 +51,14 @@ jobs:
               {
                 "id": "central",
                 "name":  "${{ github.repository_owner }}-libs-release",
-                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "url": "https://ybor.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
                 "snapshots": { "enabled": "false" },
                 "releases": { "enabled": "true" }
               },
               {
                 "id": "snapshots",
                 "name":  "${{ github.repository_owner }}-libs-snapshot",
-                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://ybor.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
                 "snapshots": { "enabled": "true" },
                 "releases": { "enabled": "false" }
               }
@@ -75,7 +75,7 @@ jobs:
       - name: Login to Artifactory Container Registry
         uses: docker/login-action@v2
         with:
-          registry: naxgrp.jfrog.io
+          registry: ybor.jfrog.io
           username: ${{ secrets.ARTIFACTORY_USERNAME }}
           password: ${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}
 
@@ -96,12 +96,11 @@ jobs:
           echo "value=$value-${branch_name_formatted}"
           mvn versions:set -DnewVersion=$value-${branch_name_formatted} -DgenerateBackupPoms=false
 
-      # force using naxgrp/amazoncorretto:17-alpine3.17 in dockerhub via jfrog remote proxy
       - name: Maven Build
         id: mvn_build
         run: |
           mkdir artifacts
-          mvn -B deploy -Pdocker-deploy -Djib.from.image=naxgrp.jfrog.io/nax-platform-docker/naxgrp/java-datadog:latest-java-datadog-19a5dbb -Djib.from.platforms=linux/amd64,linux/arm64 -Dmaven-jib-plugin.version=3.4.1
+          mvn -B deploy -Pdocker-deploy -Djib.from.image=ybor.jfrog.io/ybor-platform-docker/ybor/java-datadog:latest-java-datadog-19a5dbb -Djib.from.platforms=linux/amd64,linux/arm64 -Dmaven-jib-plugin.version=3.4.1
           mvn $MAVEN_CLI_OPTS org.apache.maven.plugins:maven-help-plugin:3.1.1:evaluate -Dexpression=project.version -q -DforceStdout > artifacts/version
           echo $(basename ${GITHUB_REPOSITORY})
           cat $(basename ${GITHUB_REPOSITORY})-server/target/jib-image.digest

@@ -61,7 +61,7 @@ jobs:
       - name: Login to Artifactory Container Registry
         uses: docker/login-action@v2
         with:
-          registry: naxgrp.jfrog.io
+          registry: ybor.jfrog.io
           username: ${{ secrets.ARTIFACTORY_USERNAME }}
           password: ${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}
       
@@ -105,7 +105,7 @@ jobs:
       - name: Push changes
         run: |
           git fetch
-          git config user.email "github@naxgrp.com"
+          git config user.email "actions@github.com"
           git config user.name "Github CI"
           git add --all
           git commit -m "Release version ${{ steps.TAG.outputs.code_version }}"

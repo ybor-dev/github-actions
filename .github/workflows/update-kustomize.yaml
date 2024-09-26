@@ -40,8 +40,8 @@ jobs:
             - git@github.com:${{github.repository_owner}}/${{ github.event.client_payload.resource_directory_name || github.event.client_payload.directory_name }}/.platform/kubernetes/${{ github.event.client_payload.environment_dir }}
           EndOfMessage
           fi
-          kustomize edit set image ${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server=naxgrp.jfrog.io/${{github.repository_owner}}-docker-local/applications/${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server@${{ github.event.client_payload.digest }}
-          kustomize edit set annotation meta.naxgrp.com/github-repository:${{github.event.client_payload.repository}}
+          kustomize edit set image ${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server=ybor.jfrog.io/${{github.repository_owner}}-docker-local/applications/${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server@${{ github.event.client_payload.digest }}
+          kustomize edit set annotation meta.ybor.ai/github-repository:${{github.event.client_payload.repository}}
           git add .
 
       - name: Update image digest for Run Studio Managed Clusters (via HTTPS Auth)
@@ -64,9 +64,9 @@ jobs:
           if [ "${{ github.event.client_payload.registry}}" = "ecr" ]; then
             kustomize edit set image ${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server=${{ github.event.client_payload.account_id}}.dkr.ecr.${{ github.event.client_payload.region }}.amazonaws.com/${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server@${{ github.event.client_payload.digest }}
           else
-            kustomize edit set image ${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server=naxgrp.jfrog.io/${{github.repository_owner}}-docker-local/applications/${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server@${{ github.event.client_payload.digest }}
+            kustomize edit set image ${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server=ybor.jfrog.io/${{github.repository_owner}}-docker-local/applications/${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server@${{ github.event.client_payload.digest }}
           fi
-          kustomize edit set annotation meta.naxgrp.com/github-repository:${{github.event.client_payload.repository}}
+          kustomize edit set annotation meta.ybor.ai/github-repository:${{github.event.client_payload.repository}}
           git add .
       - name: Create backstage components for project
         run: |
@@ -78,10 +78,10 @@ jobs:
           kind: Component
           metadata:
             annotations:
-              argocd/app-selector: naxgrp.com/app=${{ github.event.client_payload.directory_name }}
+              argocd/app-selector: ybor.ai/app=${{ github.event.client_payload.directory_name }
               github.com/project-slug: ${{github.repository_owner}}/${{ github.event.client_payload.directory_name }}
               backstage.io/kubernetes-namespace: ${{ github.event.client_payload.directory_name }}
-              backstage.io/kubernetes-label-selector: naxgrp.com/app=${{ github.event.client_payload.directory_name }}
+              backstage.io/kubernetes-label-selector: ybor.ai/app=${{ github.event.client_payload.directory_name }}
             description: ${{ github.event.client_payload.directory_name }}
             name: ${{ github.event.client_payload.directory_name }}            
           spec:

@@ -1,0 +1,84 @@
+on:
+  workflow_call:
+    secrets:
+      SSH_KEY:
+        required: true
+      SSO_URL:
+        required: true
+      ARTIFACTORY_DOCKERCONFIG:
+        required: true
+      ARGOCD_CERTIFICATE:
+        required: true
+      GRAFANA_CLIENT_ID:
+        required: true
+      GRAFANA_CLIENT_SECRET:
+        required: true
+      ARM_CLIENT_ID:
+        required: true
+      ARM_CLIENT_SECRET:
+        required: true
+
+name: Deploy Azure Infrastructure
+
+env:
+  TERRAFORM_VERSION: 1.4.4
+  ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+  ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
+  TF_VAR_jv_project: ${{ vars.TF_VAR_JV_PROJECT }}
+  TF_VAR_jv_name: ${{ vars.TF_VAR_JV_NAME }}
+  TF_VAR_grafana_client_id: ${{ secrets.GRAFANA_CLIENT_ID }}
+  TF_VAR_grafana_client_secret: ${{ secrets.GRAFANA_CLIENT_SECRET }}
+  TF_VAR_location: ${{ vars.AZURE_PRIMARY_LOCATION }}
+  TF_VAR_docker_json_config: ${{ secrets.ARTIFACTORY_DOCKERCONFIG }}
+  TF_VAR_sso_url: ${{ secrets.SSO_URL }}
+  TF_VAR_argocd_certificate: ${{ secrets.ARGOCD_CERTIFICATE }}
+  TF_VAR_github_ssh_key: ${{ secrets.SSH_KEY }}
+
+jobs:
+  jv:
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJson(vars.AZURE_MATRIX) }}
+
+    env:
+      ARM_SUBSCRIPTION_ID: ${{ matrix.subscription_id }}
+      TF_VAR_environment: ${{ matrix.environment }}
+      TF_VAR_resource_group_name: ${{ matrix.tfstate.resource_group }}
+      TF_VAR_storage_account_name: ${{ matrix.tfstate.storage_account }}
+      TF_VAR_container_name: ${{ matrix.tfstate.container }}
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1.2.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Run Terraform init
+        id: init
+        working-directory: terraform
+        run: |
+          eval `ssh-agent -s`
+          ssh-add - <<< '${{ secrets.SSH_KEY }}'
+          terraform init -input=false -backend-config="resource_group_name=${TF_VAR_resource_group_name}" -backend-config="storage_account_name=${TF_VAR_storage_account_name}" -backend-config="container_name=${TF_VAR_container_name}"
+          terraform workspace new "${{ matrix.environment }}" || true
+          terraform workspace select "${{ matrix.environment }}"
+
+      - name: Terraform Validate
+        id: validate
+        working-directory: terraform
+        run: terraform validate -no-color
+      - name: Terraform Apply
+        id: apply
+        working-directory: terraform
+        run: |
+          terraform workspace list
+          terraform apply -auto-approve -input=false
+        env:
+          TF_WORKSPACE: ${{ matrix.environment }}

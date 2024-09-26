@@ -1,0 +1,197 @@
+name: Build & Deploy (Rust Service)
+
+on:
+  workflow_call:
+    outputs:
+      digest:
+        description: "The docker image digest for the built image"
+        value: ${{ jobs.build.outputs.digest }}
+    secrets:
+      DOCKER_USERNAME:
+        description: The username to use to authenticate with the Docker registry.
+        required: true
+      DOCKER_PASSWORD:
+        description: The password to use to authenticate with the Docker registry.
+        required: true
+      CARGO_TOKEN:
+        description: The token to use to authenticate with the Cargo registry.
+        required: true
+      UPDATE_MANIFEST_TOKEN:
+        description: The token to use to push the new image digest to the .platform repo.
+        required: true
+    inputs:
+      MODE:
+        description: Release or Debug mode
+        type: string
+        required: false
+        default: release
+      DOCKER_REGISTRY:
+        description: The hostname of the Docker registry as you would enter it for the `docker login` command.
+        type: string
+        required: true
+      DOCKER_IMAGE_NAME:
+        description: "The namespaced Docker image name. Example: `docker push -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}:latest`"
+        type: string
+        default: ${{ github.repository }}
+        required: false
+      DOCKER_CONTEXT:
+        description: The path to the Docker context to build.
+        type: string
+        default: '.'
+        required: false
+      DOCKERFILE:
+        description: The absolute path to the Dockerfile to build.
+        type: string
+        default: './Dockerfile'
+        required: false
+      CARGO_REGISTRY_ALIAS:
+        description: The alias of the Cargo registry to publish to as specified in the .cargo/config file of the repo.
+        type: string
+        required: false
+        default: 'crates-io' # Default to the public registry
+      CARGO_PACKAGES:
+        description: A space-separated list of Cargo libraries/packages to publish.
+        type: string
+        required: false
+        default: ''
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    outputs:
+      version: ${{ steps.pkg-version.outputs.VERSION }}
+      digest: ${{ steps.docker_build.outputs.digest }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Required for Multi-arch builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      ##########
+
+      - name: Login to Docker Repository
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2.7.3
+        with:
+          shared-key: build
+
+      - name: Install cargo-release
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-release
+          version: 0.25.10
+
+      - name: Cargo build Release
+        env:
+          CARGO_INCREMENTAL: "1"
+        run: |
+          if [ "${{ inputs.MODE }}" = "release" ]; then
+            cargo build --release
+          else
+            cargo build
+          fi
+
+      - name: Get Package Version
+        id: pkg-version
+        run: echo "VERSION=$(cargo xtask docker image version)" >> $GITHUB_OUTPUT
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ inputs.DOCKER_REGISTRY }}/${{ inputs.DOCKER_IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.pkg-version.outputs.VERSION }},enable={{is_default_branch}}
+            type=ref,event=branch,prefix=${{ steps.pkg-version.outputs.VERSION }}-,enable=${{ github.ref_name != 'main' }}
+            type=sha
+
+      - name: Build and push
+        id: docker_build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.DOCKER_CONTEXT }}
+          file: ${{ inputs.DOCKERFILE }}
+          pull: true
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Record Summary
+        run: |
+          echo "Rust Application version: ${{ steps.pkg-version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "Docker image digest: ${{ steps.docker_build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+          echo "### Docker Tags" >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
+
+  publish-crates:
+    if: github.ref_name == 'main'
+    # This job has been known to fail due to intermittent issues. We continue on error to avoid blocking the pipeline.
+    # Having it as a separate job in the workflow allows us to rerun just this job if it fails.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2.7.3
+        with:
+          shared-key: build
+
+      - name: Login to Cargo Repository
+        run: |
+          cargo login --registry ${{ inputs.CARGO_REGISTRY_ALIAS }} 'Bearer ${{ secrets.CARGO_TOKEN }}'
+          cat > ~/.cargo/config.toml <<CONFIG
+          [registry]
+          global-credential-providers = ["cargo:token"]
+          CONFIG
+
+      - name: Install cargo-release
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-release
+          version: 0.25.10
+
+      - name: Publish Crates
+        run: |
+          CRATES_TO_PUBLISH=$(echo '${{ inputs.CARGO_PACKAGES }}' | xargs -n1 echo -n ' --package')
+          cargo release publish $CRATES_TO_PUBLISH --registry ${{ inputs.CARGO_REGISTRY_ALIAS }} --no-confirm --no-verify --execute
+
+  trigger-cd:
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Trigger Update Image Digest
+        run: |
+          echo ${{ github.ref }}
+          echo ${{ needs.build.outputs.digest }}
+          echo ${{ vars.PLATFORM_DISPATCH_URL }}
+          curl -X POST \
+            -H "Accept: application/vnd.github.everest-preview+json" \
+            -H "Authorization: token ${{ secrets.UPDATE_MANIFEST_TOKEN }}" \
+            ${{ vars.PLATFORM_DISPATCH_URL }} \
+            --fail-with-body \
+            -d "{\"event_type\": \"update-digest\", \"client_payload\": {\"repository\": \"${GITHUB_REPOSITORY}\", \"directory_name\": \"$(basename ${GITHUB_REPOSITORY})\", \"environment_dir\": \"dev\", \"digest\": \"${{ needs.build.outputs.digest }}\"}}"

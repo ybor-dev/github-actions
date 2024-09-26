@@ -1,0 +1,97 @@
+name: DEV Environment Build
+
+on:
+  workflow_call:
+    secrets:
+      ARTIFACTORY_USERNAME:
+        required: true
+      ARTIFACTORY_IDENTITY_TOKEN:
+        required: true
+    inputs:
+      WORKING_DIRECTORY:
+        required: false
+        type: string
+
+jobs:
+  build_and_publish_snapshots:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Configure Maven
+        uses: whelk-io/maven-settings-xml-action@v21
+        with:
+          servers: >
+            [
+              { "id": "central", "username": "${{ secrets.ARTIFACTORY_USERNAME }}", "password": "${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}" },
+              { "id": "snapshots", "username": "${{ secrets.ARTIFACTORY_USERNAME }}", "password": "${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}" }
+            ]
+          repositories: >
+            [
+              {
+                "id": "central",
+                "name":  "${{ github.repository_owner }}-libs-release",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "snapshots": { "enabled": "false" }
+              },
+              {
+                "id": "snapshots",
+                "name":  "${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "snapshots": { "enabled": "true" }
+              }
+            ]
+          plugin_repositories: >
+            [
+              {
+                "id": "central",
+                "name":  "${{ github.repository_owner }}-libs-release",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "snapshots": { "enabled": "false" }
+              },
+              {
+                "id": "snapshots",
+                "name":  "${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "snapshots": { "enabled": "true" }
+              }
+            ]
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'corretto'
+          java-version: '17'
+          cache: 'maven'
+          overwrite-settings: false
+
+      - name: If not main branch, append branch name to version
+        if: github.ref != 'refs/heads/main'
+        run: |
+          value=$(mvn $MAVEN_CLI_OPTS org.apache.maven.plugins:maven-help-plugin:3.1.1:evaluate -Dexpression=project.version -q -DforceStdout)
+          branch_name="${GITHUB_REF#refs/heads/}"
+          branch_name_formatted=$(echo "${branch_name}" | sed 's/[\\\/\:\"\<\>\|\?\*]/-/g')
+          echo "value=$value-${branch_name_formatted}"
+          mvn versions:set -DnewVersion=$value-${branch_name_formatted} -DgenerateBackupPoms=false
+
+      - name: Install protoc
+        run: |
+          PROTOC_VERSION='3.15.8' # Set the protoc version you need
+          curl -L -o protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          unzip protoc.zip -d protoc
+          sudo mv protoc/bin/* /usr/local/bin/
+          sudo mv protoc/include/* /usr/local/include/
+          rm -rf protoc.zip protoc
+
+      - name: Maven Build
+        id: mvn_build
+        run: |
+          if [ "${{ inputs.WORKING_DIRECTORY }}" ]; then
+            cd ${{ inputs.WORKING_DIRECTORY }}
+            echo "Changed directory to ${{ inputs.WORKING_DIRECTORY }}"
+          else
+            echo "WORKING_DIRECTORY is not set. Skipping directory change."
+          fi        
+          value=$(mvn $MAVEN_CLI_OPTS org.apache.maven.plugins:maven-help-plugin:3.1.1:evaluate -Dexpression=project.version -q -DforceStdout)
+          mvn -B install deploy
+          echo "Maven version: $value" >> $GITHUB_STEP_SUMMARY

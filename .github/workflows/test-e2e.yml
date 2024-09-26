@@ -1,0 +1,336 @@
+name: Test E2E
+
+on:
+  workflow_call:
+    secrets:
+      ARTIFACTORY_TOKEN:
+        required: true
+      ARTIFACTORY_USERNAME:
+        required: true
+      ARTIFACTORY_IDENTITY_TOKEN:
+        required: true
+      UPDATE_MANIFEST_TOKEN:
+        required: true
+      TESTRAIL_USERNAME:
+        required: false
+      TESTRAIL_PASSWORD:
+        required: false
+      BROWSERSTACK_USERNAME:
+        description: "BROWSERSTACK_USERNAME"
+        required: false
+      BROWSERSTACK_ACCESS_KEY:
+        description: "BROWSERSTACK_ACCESS_KEY"
+        required: false
+
+    inputs:
+      environment:
+        description: "environment"
+        required: true
+        default: "dev"
+        type: string
+      app:
+        description: "application"
+        required: true
+        default: ""
+        type: string
+      specs:
+        description: "cypress specs"
+        required: false
+        type: string
+
+      CYPRESS_AUTH0_DOMAIN:
+        description: "CYPRESS_AUTH0_DOMAIN"
+        required: false
+        default: "false"
+        type: string
+      CYPRESS_AUTH0_CLIENT_ID:
+        description: "CYPRESS_AUTH0_CLIENT_ID"
+        required: false
+        type: string
+      CYPRESS_AUTH0_CLIENT_SECRET:
+        description: "CYPRESS_AUTH0_CLIENT_SECRET"
+        required: false
+        type: string
+
+      TESTRAIL_ENABLED:
+        description: "TESTRAIL_ENABLED"
+        required: false
+        default: "false"
+        type: string
+      TESTRAIL_INSTANCE_NAME:
+        description: "TESTRAIL_INSTANCE_NAME"
+        required: false
+        type: string
+      TESTRAIL_PROJECT_NAME:
+        description: "TESTRAIL_INSTANCE_NAME"
+        required: false
+        type: string
+
+      CYPRESS_TWILIO_USERNAME:
+        description: "CYPRESS_TWILIO_USERNAME"
+        required: false
+        type: string
+      CYPRESS_TWILIO_PASSWORD:
+        description: "CYPRESS_TWILIO_PASSWORD"
+        required: false
+        type: string
+
+      BROWSERSTACK_ENABLED:
+        description: "BROWSERSTACK_ENABLED"
+        required: false
+        default: "false"
+        type: string
+
+env:
+  ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+  ARTIFACTORY_IDENTITY_TOKEN: ${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}
+  ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
+  UPDATE_MANIFEST_TOKEN: ${{ secrets.UPDATE_MANIFEST_TOKEN }}
+  CYPRESS_AUTH0_DOMAIN: ${{ secrets.TESTRAIL_USERNAME }}
+  CYPRESS_AUTH0_CLIENT_ID: ${{ secrets.TESTRAIL_PASSWORD }}
+  CYPRESS_AUTH0_CLIENT_SECRET: ${{ secrets.TESTRAIL_PASSWORD }}
+  TESTRAIL_USERNAME: ${{ secrets.TESTRAIL_USERNAME }}
+  TESTRAIL_PASSWORD: ${{ secrets.TESTRAIL_PASSWORD }}
+  CYPRESS_TWILIO_USERNAME: ${{ secrets.TESTRAIL_USERNAME }}
+  CYPRESS_TWILIO_PASSWORD: ${{ secrets.TESTRAIL_PASSWORD }}
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+    # run 3 instances in parallel
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [1, 2, 3]
+    steps:
+      - run: env
+
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Setup NodeJS 16
+        uses: actions/setup-node@v1
+        with:
+          node-version: 16
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Get pnpm cache directory path
+        id: pnpm-cache-dir-path
+        run: echo "::set-output name=dir::$(pnpm config get cacheFolder)"
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v3
+        id: pnpm-cache
+        with:
+          path: |
+            ${{ steps.pnpm-cache-dir-path.outputs.dir }}
+            **\node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Cache Cypress binary
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/Cypress
+          key: cypress-${{ runner.os }}-cypress-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            cypress-${{ runner.os }}-cypress-
+
+      - name: Install dependencies
+        if: steps.pnpm-cache.outputs.cache-hit != 'true'
+        run: pnpm install
+
+      - name: E2E Smoke Tests ${{ inputs.environment }}
+        if: ${{ inputs.environment == 'prod' }}
+        env:
+          CYPRESS_ENVIRONMENT: ${{ inputs.environment }}
+          # required to split tests to run in parallel
+          SPLIT: ${{ strategy.job-total }}
+          SPLIT_INDEX: ${{ strategy.job-index }}
+        run: |
+          RUN=CI pnpm nx e2e-smoke ${{ inputs.app }} --configuration=${{ inputs.environment }} --skip-nx-cache
+
+      - name: E2E Tests ${{ inputs.environment }}
+        if: ${{ inputs.environment != 'prod' }}
+        env:
+          CYPRESS_ENVIRONMENT: ${{ inputs.environment }}
+          # required to split tests to run in parallel
+          SPLIT: ${{ strategy.job-total }}
+          SPLIT_INDEX: ${{ strategy.job-index }}
+        run: |
+          RUN=CI pnpm nx e2e ${{ inputs.app }} --configuration=${{ inputs.environment }} --skip-nx-cache
+
+      - name: Archive code coverage results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: reports
+          path: apps/${{ inputs.app }}/reports
+
+  generate-reports:
+    needs: run-tests
+    runs-on: ubuntu-latest
+    env:
+      ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+      ARTIFACTORY_IDENTITY_TOKEN: ${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}
+      ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
+    steps:
+      - run: env
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Setup NodeJS 16
+        uses: actions/setup-node@v1
+        with:
+          node-version: 16
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Get pnpm cache directory path
+        id: pnpm-cache-dir-path
+        run: echo "::set-output name=dir::$(pnpm config get cacheFolder)"
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v3
+        id: pnpm-cache
+        with:
+          path: |
+            ${{ steps.pnpm-cache-dir-path.outputs.dir }}
+            **\node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        if: steps.pnpm-cache.outputs.cache-hit != 'true'
+        run: pnpm install
+
+      - name: Download code coverage results
+        if: always()
+        uses: actions/download-artifact@v2
+        with:
+          name: reports
+          path: apps/${{ inputs.app }}/reports
+
+      - name: Merge test results into one
+        if: always()
+        run: |
+          pnpm nx report:merge ${{ inputs.app }}
+          pnpm nx report:merge-junit ${{ inputs.app }}
+
+      - name: Generate HTML report
+        if: always()
+        run: pnpm nx report:generate ${{ inputs.app }}
+
+      - name: Archive junit report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: junit-report
+          path: apps/${{ inputs.app }}/reports/junit-report.xml
+
+      - name: Archive code coverage results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-report
+          path: public
+
+      # install python to install trcli if TESTRAIL_ENABLED
+      - name: Python setup
+        if: ${{ inputs.TESTRAIL_ENABLED == 'true' }}
+        uses: actions/setup-python@v3
+        with:
+          python-version: "3.x"
+
+      # send reports to TestRail if TESTRAIL_ENABLED
+      - name: TestRail CLI upload results
+        if: ${{ inputs.TESTRAIL_ENABLED == 'true' }}
+        run: |
+          pip install trcli
+          trcli -y \
+            -h https://${{ inputs.TESTRAIL_INSTANCE_NAME }}.testrail.io/ \
+            --project "${{ inputs.TESTRAIL_PROJECT_NAME }}" \
+            -u ${{ secrets.TESTRAIL_USERNAME }} \
+            -p ${{ secrets.TESTRAIL_PASSWORD }} \
+            parse_junit \
+            --case-matcher "name" \
+            --title "Automated Tests from GitHub workflow" \
+            --close-run \
+            --run-description ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} \
+            -f "apps/${{ inputs.app }}/reports/junit-report.xml"
+
+  browserstack-cypress:
+    needs: run-tests
+    runs-on: ubuntu-latest
+    if: ${{ inputs.BROWSERSTACK_ENABLED == 'true' }}
+    env:
+      ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+      ARTIFACTORY_IDENTITY_TOKEN: ${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}
+      ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
+      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+    steps:
+      - run: env
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Setup NodeJS 16
+        uses: actions/setup-node@v1
+        with:
+          node-version: 16
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Get pnpm cache directory path
+        id: pnpm-cache-dir-path
+        run: echo "::set-output name=dir::$(pnpm config get cacheFolder)"
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v3
+        id: pnpm-cache
+        with:
+          path: |
+            ${{ steps.pnpm-cache-dir-path.outputs.dir }}
+            **\node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        if: steps.pnpm-cache.outputs.cache-hit != 'true'
+        run: pnpm install
+
+      - name: "BrowserStack Env Setup"
+        uses: "browserstack/github-actions/setup-env@master"
+        with:
+          username: ${{ secrets.BROWSERSTACK_USERNAME }}
+          access-key: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          build-name: ${{ github.run_id }}
+          project-name: ${{ inputs.app }}
+
+      - name: "BrowserStack Local Tunnel Setup" # Invokes the setup-local action
+        uses: browserstack/github-actions/setup-local@master
+        with:
+          local-testing: start
+          local-identifier: random
+
+      - name: "Installing browserstack-cypress-cli"
+        run: npm install -g browserstack-cypress-cli
+
+      - name: "Running test on BrowserStack" # Invokes the actual test script that would run on BrowserStack browsers
+        run: RUN=CI pnpm nx browserstack:run ${{ inputs.app }} --args="--username=${{ secrets.BROWSERSTACK_USERNAME }} --accessKey=${{ secrets.BROWSERSTACK_ACCESS_KEY }}"

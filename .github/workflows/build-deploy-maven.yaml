@@ -1,0 +1,128 @@
+on:
+  workflow_call:
+    secrets:
+      ARTIFACTORY_USERNAME:
+        required: true
+      ARTIFACTORY_IDENTITY_TOKEN:
+        required: true
+      UPDATE_MANIFEST_TOKEN:
+        required: true
+    outputs:
+      digest:
+        description: "The docker image digest for the built image"
+        value: ${{ jobs.build-and-publish-snapshots.outputs.digest }}
+
+jobs:
+  build-and-publish-snapshots:
+    environment: dev
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.mvn_build.outputs.digest }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Configure Maven
+        uses: whelk-io/maven-settings-xml-action@v21
+        with:
+          servers: >
+            [
+              { "id": "central", "username": "${{ secrets.ARTIFACTORY_USERNAME }}", "password": "${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}" },
+              { "id": "snapshots", "username": "${{ secrets.ARTIFACTORY_USERNAME }}", "password": "${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}" }
+            ]
+          repositories: >
+            [
+              {
+                "id": "central",
+                "name":  "${{ github.repository_owner }}-libs-release",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "snapshots": { "enabled": "false" },
+                "releases": { "enabled": "true" }
+              },
+              {
+                "id": "snapshots",
+                "name":  "${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "snapshots": { "enabled": "true" },
+                "releases": { "enabled": "false" }
+              }
+            ]
+          plugin_repositories: >
+            [
+              {
+                "id": "central",
+                "name":  "${{ github.repository_owner }}-libs-release",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "snapshots": { "enabled": "false" },
+                "releases": { "enabled": "true" }
+              },
+              {
+                "id": "snapshots",
+                "name":  "${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "snapshots": { "enabled": "true" },
+                "releases": { "enabled": "false" }
+              }
+            ]
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: "corretto"
+          java-version: "17"
+          cache: "maven"
+          overwrite-settings: false
+
+      - name: Login to Artifactory Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: naxgrp.jfrog.io
+          username: ${{ secrets.ARTIFACTORY_USERNAME }}
+          password: ${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}
+
+      - name: If not main branch, append branch name to version
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "dry run"
+          mvn $MAVEN_CLI_OPTS org.apache.maven.plugins:maven-help-plugin:3.1.1:evaluate -Dexpression=project.version -q -DforceStdout
+
+          echo ""
+          echo "setting value"
+          value=$(mvn $MAVEN_CLI_OPTS org.apache.maven.plugins:maven-help-plugin:3.1.1:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "$value"
+          branch_name="${GITHUB_REF#refs/heads/}"
+          echo "$branch_name"
+          branch_name_formatted=$(echo "${branch_name}" | sed 's/[\\\/\:\"\<\>\|\?\*]/-/g')
+          echo "$branch_name_formatted"
+          echo "value=$value-${branch_name_formatted}"
+          mvn versions:set -DnewVersion=$value-${branch_name_formatted} -DgenerateBackupPoms=false
+
+      # force using naxgrp/amazoncorretto:17-alpine3.17 in dockerhub via jfrog remote proxy
+      - name: Maven Build
+        id: mvn_build
+        run: |
+          mkdir artifacts
+          mvn -B deploy -Pdocker-deploy -Djib.from.image=naxgrp.jfrog.io/nax-platform-docker/naxgrp/amazoncorretto:17-alpine3.17 -Djib.from.platforms=linux/amd64,linux/arm64 -Dmaven-jib-plugin.version=3.4.1
+          mvn $MAVEN_CLI_OPTS org.apache.maven.plugins:maven-help-plugin:3.1.1:evaluate -Dexpression=project.version -q -DforceStdout > artifacts/version
+          echo $(basename ${GITHUB_REPOSITORY})
+          cat $(basename ${GITHUB_REPOSITORY})-server/target/jib-image.digest
+          echo "digest=$(cat $(basename ${GITHUB_REPOSITORY})-server/target/jib-image.digest)" >> $GITHUB_OUTPUT
+          echo "version=$(mvn $MAVEN_CLI_OPTS org.apache.maven.plugins:maven-help-plugin:3.1.1:evaluate -Dexpression=project.version -q -DforceStdout)" >> $GITHUB_OUTPUT
+
+      - name: Update summary
+        run: |
+          echo "Docker image digest: ${{ steps.mvn_build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+          echo "Maven version: ${{ steps.mvn_build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Trigger Update Image Digest
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo ${{ github.ref }}
+          echo ${{ steps.mvn_build.outputs.digest }}
+          echo ${{ vars.PLATFORM_DISPATCH_URL }}
+          curl -X POST \
+            -H "Accept: application/vnd.github.everest-preview+json" \
+            -H "Authorization: token ${{ secrets.UPDATE_MANIFEST_TOKEN }}" \
+            ${{ vars.PLATFORM_DISPATCH_URL }} \
+            --fail-with-body \
+            -d "{\"event_type\": \"update-digest\", \"client_payload\": {\"repository\": \"${GITHUB_REPOSITORY}\", \"directory_name\": \"$(basename ${GITHUB_REPOSITORY})\", \"environment_dir\": \"dev\", \"digest\": \"${{ steps.mvn_build.outputs.digest }}\"}}"

@@ -1,0 +1,172 @@
+name: Build & Deploy (Rust Workspace)
+
+on:
+  workflow_call:
+    outputs:
+      VERSION:
+        value: ${{ jobs.build.outputs.VERSION }}
+    secrets:
+      DOCKER_USERNAME:
+        description: The username to use to authenticate with the Docker registry.
+        required: true
+      DOCKER_PASSWORD:
+        description: The password to use to authenticate with the Docker registry.
+        required: true
+      CARGO_TOKEN:
+        description: The token to use to authenticate with the Cargo registry.
+        required: true
+    inputs:
+      MODE:
+        description: Release or Debug mode
+        type: string
+        required: false
+        default: release
+      DOCKER_REGISTRY:
+        description: The hostname of the Docker registry as you would enter it for the `docker login` command.
+        type: string
+        required: true
+      DOCKER_IMAGE_NAME:
+        description: "The namespaced Docker image name. Example: `docker push -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}:latest`"
+        type: string
+        default: ${{ github.repository }}
+        required: false
+      DOCKER_CONTEXT:
+        description: The path to the Docker context to build.
+        type: string
+        default: '.'
+        required: false
+      DOCKERFILE:
+        description: The absolute path to the Dockerfile to build.
+        type: string
+        default: './Dockerfile'
+        required: false
+      CARGO_REGISTRY_ALIAS:
+        description: The alias of the Cargo registry to publish to as specified in the .cargo/config file of the repo.
+        type: string
+        required: false
+        default: 'crates-io' # Default to the public registry
+      CARGO_PACKAGES:
+        description: A space-separated list of Cargo libraries/packages to publish.
+        type: string
+        required: false
+        default: ''
+      DO_VERSION_BUMP:
+        description: A value indication whether to bump the version as the final step or not.
+        type: boolean
+        required: false
+        default: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    outputs:
+      VERSION: ${{ steps.pkg-version.outputs.VERSION }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      # Required for Multi-arch builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      ##########
+
+      - name: Login to Docker Repository
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ inputs.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2.7.3
+
+      - name: Login to Cargo Repository
+        run: |
+          cargo login --registry ${{ inputs.CARGO_REGISTRY_ALIAS }} 'Bearer ${{ secrets.CARGO_TOKEN }}'
+          cat > ~/.cargo/config.toml <<CONFIG
+          [registry]
+          global-credential-providers = ["cargo:token"]
+          CONFIG
+
+      - name: Install cargo-release
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-release
+          version: 0.25.10
+
+      - name: Cargo build Release
+        env:
+          CARGO_INCREMENTAL: "1"
+        run: |
+          if [ "${{ inputs.MODE }}" = "release" ]; then
+            cargo build --release
+          else
+            cargo build
+          fi
+
+      - name: Get Package Version
+        id: pkg-version
+        run: echo ::set-output name=VERSION::$(cargo xtask pkg-version)
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            ${{ inputs.DOCKER_REGISTRY }}/${{ inputs.DOCKER_IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
+            type=raw,value=${{ steps.pkg-version.outputs.VERSION }},enable=${{ github.event_name != 'pull_request' }}
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: ${{ inputs.DOCKER_CONTEXT }}
+          file: ${{ inputs.DOCKERFILE }}
+          pull: true
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Record Summary
+        run: |
+          echo "### Docker Tags" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+      - name: Publish Crates
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          CRATES_TO_PUBLISH=$(echo '${{ inputs.CARGO_PACKAGES }}' | xargs -n1 echo -n ' --package')
+          cargo release publish $CRATES_TO_PUBLISH --registry ${{ inputs.CARGO_REGISTRY_ALIAS }} --no-confirm --no-verify -v --execute
+
+      - name: Tag and Push
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag -a ${{ steps.pkg-version.outputs.VERSION }} -m "Release ${{ steps.pkg-version.outputs.VERSION }}"
+          git push origin ${{ steps.pkg-version.outputs.VERSION }}
+
+      - name: Bump Version
+        if: ${{ inputs.DO_VERSION_BUMP && github.event_name != 'pull_request' }}
+        run: cargo release version patch -x --no-confirm --workspace
+
+      - name: Commit and Push
+        if: ${{ inputs.DO_VERSION_BUMP && github.event_name != 'pull_request' }}
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .
+          git commit -m "[skip ci] Bump Version"
+          git push

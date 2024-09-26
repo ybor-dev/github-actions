@@ -1,0 +1,189 @@
+name: E2E Tests
+
+on:
+  workflow_call:
+    secrets:
+      ARTIFACTORY_TOKEN:
+        required: true
+      ARTIFACTORY_USERNAME:
+        required: true
+      ARTIFACTORY_IDENTITY_TOKEN:
+        required: true
+      UPDATE_MANIFEST_TOKEN:
+        required: true
+      TESTRAIL_USERNAME:
+        required: true
+      TESTRAIL_PASSWORD:
+        required: true
+      CYPRESS_DEV_CLIENT_SECRET:
+        required: true
+      CYPRESS_DEV_CLIENT_ID:
+        required: true
+      CYPRESS_QA_CLIENT_SECRET:
+        required: true
+      CYPRESS_QA_CLIENT_ID:
+        required: true
+      CYPRESS_PROD_CLIENT_SECRET:
+        required: true
+      CYPRESS_PROD_CLIENT_ID:
+        required: true
+    inputs:
+      environment:
+        description: 'environment'
+        required: true
+        default: 'local_dev'
+        type: string
+      app:
+        description: 'application'
+        required: true
+        default: 'webapp-e2e'
+        type: string
+      specs:
+        description: 'cypress specs'
+        required: false
+        type: string
+      run_name:
+        description: 'TestRail run name'
+        default: 'Automated Tests from GitHub workflow'
+        required: true
+        type: string
+env:
+  CYPRESS_DEV_CLIENT_SECRET: ${{ secrets.CYPRESS_DEV_CLIENT_SECRET }}
+  CYPRESS_DEV_CLIENT_ID: ${{ secrets.CYPRESS_DEV_CLIENT_ID }}
+  CYPRESS_QA_CLIENT_SECRET: ${{ secrets.CYPRESS_QA_CLIENT_SECRET }}
+  CYPRESS_QA_CLIENT_ID: ${{ secrets.CYPRESS_QA_CLIENT_ID }}
+  CYPRESS_PROD_CLIENT_SECRET: ${{ secrets.CYPRESS_PROD_CLIENT_SECRET }}
+  CYPRESS_PROD_CLIENT_ID: ${{ secrets.CYPRESS_PROD_CLIENT_ID }}
+  ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+  ARTIFACTORY_IDENTITY_TOKEN: ${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}
+  UPDATE_MANIFEST_TOKEN: ${{ secrets.UPDATE_MANIFEST_TOKEN }}
+  ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
+  TESTRAIL_USERNAME: ${{ secrets.TESTRAIL_USERNAME }}
+  TESTRAIL_PASSWORD: ${{ secrets.TESTRAIL_PASSWORD }}
+  ENV: ${{ inputs.environment || 'local_dev' }}
+  APP: ${{ inputs.app || 'webapp-e2e' }}
+  SPECS: ${{ inputs.specs || '' }}
+  RUN_NAME: ${{ inputs.run_name || 'Automated Tests from GitHub workflow' }}
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - run:  env
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Setup NodeJS 16
+        uses: actions/setup-node@v1
+        with:
+          node-version: 16
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Get pnpm cache directory path
+        id: pnpm-cache-dir-path
+        run: echo "::set-output name=dir::$(pnpm config get cacheFolder)"
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v3
+        id: pnpm-cache
+        with:
+          path: |
+            ${{ steps.pnpm-cache-dir-path.outputs.dir }}
+            **\node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Cache Cypress binary
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/Cypress
+          key: cypress-${{ runner.os }}-cypress-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            cypress-${{ runner.os }}-cypress-
+
+      - name: Install dependencies
+        if: steps.pnpm-cache.outputs.cache-hit != 'true'
+        run: pnpm install
+
+      - name: E2E Tests DEV local
+        if: ${{ env.ENV == 'local_dev' && env.SPECS ==''}}
+        env:
+          CYPRESS_ENVIRONMENT: 'dev'
+        run: |
+          RUN=CI pnpm nx e2e-parallel-local $APP
+
+      - name: E2E Tests DEV
+        if: ${{ env.ENV == 'dev' && env.SPECS =='' }}
+        env:
+          CYPRESS_BASE_URL: 'https://webapp.us-west-2.dev.watercolor.naxgrp.com/'
+          CYPRESS_ENVIRONMENT: 'dev'
+        run: |
+          RUN=CI pnpm nx e2e-parallel $APP
+
+      - name: E2E Tests QA
+        if: ${{ env.ENV == 'qa' && env.SPECS =='' }}
+        env:
+          CYPRESS_BASE_URL: 'https://webapp.us-west-2.stg.watercolor.naxgrp.com/'
+          CYPRESS_ENVIRONMENT: 'qa'
+        run: |
+          RUN=CI pnpm nx e2e-parallel $APP
+
+      - name: E2E Tests PROD
+        if: ${{ env.ENV == 'prod' && env.SPECS =='' }}
+        env:
+          CYPRESS_BASE_URL: 'https://webapp.us-west-2.prd.watercolor.naxgrp.com/'
+          CYPRESS_ENVIRONMENT: 'prod'
+        run: |
+          RUN=CI pnpm nx e2e-parallel $APP
+
+      - name: E2E Tests Smoke Dev Local
+        if: ${{ env.ENV == 'local_dev' && env.SPECS !='' }}
+        env:
+          CYPRESS_ENVIRONMENT: 'dev'
+          ARGS: ${{env.SPECS}}
+        run: |
+          RUN=CI pnpm nx e2e-single-local $APP
+
+      - name: Merge test results into one
+        if: always()
+        run: |
+          pnpm run report:merge
+          pnpm run report:merge-junit
+
+      - name: Generate HTML report
+        if: always()
+        run: pnpm run report:generate
+
+      - name: Archive code coverage results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-report
+          path: public
+
+      - name: Python setup
+        if: always()
+        uses: actions/setup-python@v3
+        with:
+          python-version: '3.x'
+      - name: TestRail CLI upload results
+        if: always()
+        run: |
+          pip install trcli
+          trcli -n \
+            -h https://naxgrp.testrail.io/ \
+            --project "naxa-watercolor" \
+            --username ${{ secrets.TESTRAIL_USERNAME }} \
+            --password ${{ secrets.TESTRAIL_PASSWORD }} \
+            parse_junit \
+            --case-matcher "name" \
+            --title "$RUN_NAME" \
+            --close-run \
+            --run-description ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} \
+            --file "apps/webapp-e2e/results/combined-report.xml"
+

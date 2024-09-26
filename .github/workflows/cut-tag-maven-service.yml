@@ -1,0 +1,160 @@
+on:
+  workflow_call:
+    secrets:
+      ARTIFACTORY_USERNAME:
+        required: true
+      ARTIFACTORY_IDENTITY_TOKEN:
+        required: true
+    outputs:
+      digest:
+        description: "The docker image digest for the built image"
+        value: ${{ jobs.tag_version.outputs.digest }}
+      tag_name:
+        description: "Git Tag Name"
+        value: ${{ jobs.tag_version.outputs.tag_name }}
+
+jobs:
+  tag_version:
+    name: Create Tag & Build
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.TAG.outputs.tag_name }}
+      tag_value: ${{ steps.TAG.outputs.value }}
+      digest: ${{ steps.mvn_build.outputs.digest }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Configure Maven
+        uses: whelk-io/maven-settings-xml-action@v21
+        with:
+          servers: >
+            [
+              { "id": "central", "username": "${{ secrets.ARTIFACTORY_USERNAME }}", "password": "${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}" },
+              { "id": "snapshots", "username": "${{ secrets.ARTIFACTORY_USERNAME }}", "password": "${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}" }
+            ]
+          repositories: >
+            [
+              {
+                "id": "central",
+                "name":  "${{ github.repository_owner }}-libs-release",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "snapshots": { "enabled": "false" }
+              },
+              {
+                "id": "snapshots",
+                "name":  "${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "snapshots": { "enabled": "true" }
+              }
+            ]
+          plugin_repositories: >
+            [
+              {
+                "id": "central",
+                "name":  "${{ github.repository_owner }}-libs-release",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "snapshots": { "enabled": "false" }
+              },
+              {
+                "id": "snapshots",
+                "name":  "${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "snapshots": { "enabled": "true" }
+              }
+            ]
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: "corretto"
+          java-version: "17"
+          cache: "maven"
+          overwrite-settings: false
+
+      - name: Login to Artifactory Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: naxgrp.jfrog.io
+          username: ${{ secrets.ARTIFACTORY_USERNAME }}
+          password: ${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}
+
+      - name: Remove snapshot version
+        run: mvn versions:set -DremoveSnapshot -DgenerateBackupPoms=false
+
+      - name: Get TAG version
+        id: TAG
+        run: |
+          mvn_version=$(mvn $MAVEN_CLI_OPTS org.apache.maven.plugins:maven-help-plugin:3.1.1:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "value=$mvn_version"
+          echo "value=$mvn_version" >> $GITHUB_OUTPUT
+          echo "tag_name=v$mvn_version"
+          echo "tag_name=v$mvn_version" >> $GITHUB_OUTPUT
+
+      - name: Commit & Tag Version
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .
+          git commit -am "Prepare release ${{ steps.TAG.outputs.tag_name }}"
+          git tag -a ${{ steps.TAG.outputs.tag_name }} -m "Release ${{ steps.TAG.outputs.value }}"
+          git push origin ${{ steps.TAG.outputs.tag_name }}
+
+      # force using naxgrp/amazoncorretto:17-alpine3.17 in dockerhub via jfrog remote proxy
+      - name: Maven Build - Tag
+        id: mvn_build
+        run: |
+          mvn -B deploy -Pdocker-deploy -Djib.from.image=naxgrp.jfrog.io/nax-platform-docker/naxgrp/amazoncorretto:17-alpine3.17 -Djib.from.platforms=linux/amd64,linux/arm64 -Dmaven-jib-plugin.version=3.4.1
+          cat $(basename ${GITHUB_REPOSITORY})-server/target/jib-image.digest
+          echo "digest=$(cat $(basename ${GITHUB_REPOSITORY})-server/target/jib-image.digest)" >> $GITHUB_OUTPUT
+
+      - name: Set SNAPSHOT_INCREMENT_INDEX
+        id: SNAPSHOT_INCREMENT_INDEX
+        # Future improvement, allow for values [1 major,2=minor,3=patch] depending on parameter / git commits
+        run: echo "value=3" >> $GITHUB_OUTPUT
+
+      - name: Prepare next snapshot version
+        id: SNAPSHOT
+        run: |
+          mvn versions:set -DnextSnapshot -DnextSnapshotIndexToIncrement=${{ steps.SNAPSHOT_INCREMENT_INDEX.outputs.value }} -DgenerateBackupPoms=false
+          echo "value=$(mvn $MAVEN_CLI_OPTS org.apache.maven.plugins:maven-help-plugin:3.1.1:evaluate -Dexpression=project.version -q -DforceStdout)" >> $GITHUB_OUTPUT
+
+      # force using naxgrp/amazoncorretto:17-alpine3.17 in dockerhub via jfrog remote proxy
+      - name: Maven Build - Snapshot
+        id: mvn_build_snapshot
+        run: |
+          mvn -B deploy -Pdocker-deploy -Djib.from.image=naxgrp.jfrog.io/nax-platform-docker/naxgrp/amazoncorretto:17-alpine3.17 -Djib.from.platforms=linux/amd64,linux/arm64 -Dmaven-jib-plugin.version=3.4.1
+          cat $(basename ${GITHUB_REPOSITORY})-server/target/jib-image.digest
+          echo "digest=$(cat $(basename ${GITHUB_REPOSITORY})-server/target/jib-image.digest)" >> $GITHUB_OUTPUT
+
+      - name: Commit snapshot version update
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .
+          git commit -am "Prepare next development version ${{ steps.SNAPSHOT.outputs.value }}"
+          git push origin main
+
+
+      - name: Record Summary
+        run: |
+          echo "### Tagged Version" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.mvn_build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Snapshot" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.mvn_build_snapshot.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Prepare Artifact
+        run: |
+          echo "${{ steps.mvn_build.outputs.digest }}" >> digest.txt
+
+      - uses: ncipollo/release-action@v1.12.0
+        with:
+          name: Version ${{ steps.TAG.outputs.value }}
+          tag: ${{ steps.TAG.outputs.tag_name }}
+          makeLatest: true
+          artifacts: "digest.txt"
+          removeArtifacts: true
+          generateReleaseNotes: true
+          body: |
+            Maven version: `${{ steps.TAG.outputs.value }}`
+            Docker image digest: `${{ steps.mvn_build.outputs.digest }}`

@@ -1,0 +1,119 @@
+on:
+  workflow_call:
+    secrets:
+      ARTIFACTORY_USERNAME:
+        required: true
+      ARTIFACTORY_IDENTITY_TOKEN:
+        required: true
+    outputs:
+      tag_name:
+        description: "Git Tag Name"
+        value: ${{ jobs.tag_version.outputs.tag_name }}
+
+jobs:
+  tag_version:
+    name: Create Tag & Build
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.TAG.outputs.tag_name }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Configure Maven
+        uses: whelk-io/maven-settings-xml-action@v21
+        with:
+          servers: >
+            [
+              { "id": "central", "username": "${{ secrets.ARTIFACTORY_USERNAME }}", "password": "${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}" },
+              { "id": "snapshots", "username": "${{ secrets.ARTIFACTORY_USERNAME }}", "password": "${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}" }
+            ]
+          repositories: >
+            [
+              {
+                "id": "central",
+                "name":  "${{ github.repository_owner }}-libs-release",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "snapshots": { "enabled": "false" }
+              },
+              {
+                "id": "snapshots",
+                "name":  "${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "snapshots": { "enabled": "true" }
+              }
+            ]
+          plugin_repositories: >
+            [
+              {
+                "id": "central",
+                "name":  "${{ github.repository_owner }}-libs-release",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "snapshots": { "enabled": "false" }
+              },
+              {
+                "id": "snapshots",
+                "name":  "${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "snapshots": { "enabled": "true" }
+              }
+            ]
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'corretto'
+          java-version: '17'
+          cache: 'maven'
+          overwrite-settings: false
+
+      - name: Get Tag Version
+        id: TAG
+        run: |
+          mvn versions:set -DremoveSnapshot -DgenerateBackupPoms=false
+          mvn_version=$(mvn $MAVEN_CLI_OPTS org.apache.maven.plugins:maven-help-plugin:3.1.1:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "value=$mvn_version"
+          echo "value=$mvn_version" >> $GITHUB_OUTPUT
+          echo "tag_name=v$mvn_version"
+          echo "tag_name=v$mvn_version" >> $GITHUB_OUTPUT
+
+      - name: Git Commit & Tag
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .
+          git commit -am "Set version to ${{ steps.TAG.outputs.tag_name }}"
+          git tag -a ${{ steps.TAG.outputs.tag_name }} -m "Release ${{ steps.TAG.outputs.value }}"
+          git push origin ${{ steps.TAG.outputs.tag_name }}
+          git push origin ${{ github.ref_name }}
+
+      - name: Maven Build - Tag
+        run: mvn -B install deploy
+
+      - name: Set SNAPSHOT_INCREMENT_INDEX
+        id: SNAPSHOT_INCREMENT_INDEX
+        run: echo "value=3" >> $GITHUB_OUTPUT
+
+      - name: Maven Build - Snapshot
+        id: SNAPSHOT
+        run: |
+          mvn versions:set -DnextSnapshot -DnextSnapshotIndexToIncrement=${{ steps.SNAPSHOT_INCREMENT_INDEX.outputs.value }} -DgenerateBackupPoms=false
+          echo "value=$(mvn $MAVEN_CLI_OPTS org.apache.maven.plugins:maven-help-plugin:3.1.1:evaluate -Dexpression=project.version -q -DforceStdout)" >> $GITHUB_OUTPUT
+          mvn -B install deploy
+
+      - name: Commit snapshot version update
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .
+          git commit -am "Prepare next development version ${{ steps.SNAPSHOT.outputs.value }}"
+          git push origin ${{ github.ref_name }}
+
+      - uses: ncipollo/release-action@v1.12.0
+        with:
+          name: Version ${{ steps.TAG.outputs.value }}
+          tag: ${{ steps.TAG.outputs.tag_name }}
+          makeLatest: true
+          generateReleaseNotes: true
+          body: |
+            Maven version: `${{ steps.TAG.outputs.value }}`

@@ -1,0 +1,245 @@
+on:
+  workflow_call:
+    outputs:
+      digest:
+        description: "The docker image digest for the built image"
+        value: ${{ jobs.tag.outputs.digest }}
+      tag_name:
+        description: "The tag name for the built image"
+        value: ${{ jobs.tag.outputs.name }}
+    secrets:
+      DOCKER_USERNAME:
+        description: The username to use to authenticate with the Docker registry.
+        required: true
+      DOCKER_PASSWORD:
+        description: The password to use to authenticate with the Docker registry.
+        required: true
+      CARGO_TOKEN:
+        description: The token to use to authenticate with the Cargo registry.
+        required: true
+    inputs:
+      LEVEL:
+        description: The level of the version to bump. Can be one of major, minor, or patch.
+        type: string
+        required: false
+        default: patch
+      MODE:
+        description: Release or Debug mode
+        type: string
+        required: false
+        default: release
+      DOCKER_REGISTRY:
+        description: The hostname of the Docker registry as you would enter it for the `docker login` command.
+        type: string
+        required: true
+      DOCKER_IMAGE_NAME:
+        description: "The namespaced Docker image name. Example: `docker push -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}:latest`"
+        type: string
+        default: ${{ github.repository }}
+        required: false
+      DOCKER_CONTEXT:
+        description: The path to the Docker context to build.
+        type: string
+        default: '.'
+        required: false
+      DOCKERFILE:
+        description: The absolute path to the Dockerfile to build.
+        type: string
+        default: './Dockerfile'
+        required: false
+      CARGO_REGISTRY_ALIAS:
+        description: The alias of the Cargo registry to publish to as specified in the .cargo/config file of the repo.
+        type: string
+        required: false
+        default: 'crates-io' # Default to the public registry
+      CARGO_PACKAGES:
+        description: A space-separated list of Cargo libraries/packages to publish.
+        type: string
+        required: false
+        default: ''
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tag:
+    outputs:
+      name: ${{ steps.tag.outputs.name }}
+      version: ${{ steps.tag.outputs.value }}
+      digest: ${{ steps.docker_build.outputs.digest }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Required for Multi-arch builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      ##########
+
+      - name: Login to Docker Repository
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2.7.3
+        with:
+          shared-key: build
+
+      - name: Install cargo-release
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-release
+          version: 0.25.10
+
+      - name: Commit & Tag Version
+        id: tag
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          cargo release ${{ inputs.LEVEL }} --workspace --no-publish --no-push --tag-prefix '' --no-confirm --execute
+
+          # The cargo release command performs a commit for us but with a generic message.
+          # So we amend the commit with a more descriptive message.
+          NEW_VERSION=$(cargo xtask docker image version)
+          git commit --amend -m "[skip ci] Prepare release $NEW_VERSION"
+          git push origin "+v$NEW_VERSION"  # Use `+` to overwrite the tag if it already exists. Usually from failed previous runs.
+          git push origin main
+
+          echo "value=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "name=v$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Cargo build Release
+        env:
+          CARGO_INCREMENTAL: "1"
+        run: |
+          if [ "${{ inputs.MODE }}" = "release" ]; then
+            cargo build --release
+          else
+            cargo build
+          fi
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ inputs.DOCKER_REGISTRY }}/${{ inputs.DOCKER_IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.tag.outputs.value }},enable={{is_default_branch}}
+            type=ref,event=branch,prefix=${{ steps.tag.outputs.value }}-,enable=${{ github.ref_name != 'main' }}
+            type=sha
+
+      - name: Build and push
+        id: docker_build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.DOCKER_CONTEXT }}
+          file: ${{ inputs.DOCKERFILE }}
+          pull: true
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+        
+      - name: Record Summary
+        run: |
+          echo "Rust Application version: ${{ steps.tag.outputs.value }}" >> $GITHUB_STEP_SUMMARY
+          echo "Docker image digest: ${{ steps.docker_build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+          echo "### Docker Tags" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Prepare Artifact
+        run: |
+          echo "${{ steps.docker_build.outputs.digest }}" >> digest.txt
+
+      - uses: ncipollo/release-action@v1.12.0
+        with:
+          name: Version ${{ steps.tag.outputs.value }}
+          tag: ${{ steps.tag.outputs.name }}
+          makeLatest: true
+          artifacts: "digest.txt"
+          removeArtifacts: true
+          generateReleaseNotes: true
+          body: |
+            Rust Application version: `${{ steps.tag.outputs.value }}`
+            Docker image digest: `${{ steps.docker_build.outputs.digest }}`
+
+  publish-crates:
+    if: github.ref_name == 'main'
+    # This job has been known to fail due to intermittent issues. We continue on error to avoid blocking the pipeline.
+    # Having it as a separate job in the workflow allows us to rerun just this job if it fails.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    needs: tag
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.name }} # Publish crates for the version we just tagged
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2.7.3
+        with:
+          shared-key: build
+
+      - name: Login to Cargo Repository
+        run: |
+          cargo login --registry ${{ inputs.CARGO_REGISTRY_ALIAS }} 'Bearer ${{ secrets.CARGO_TOKEN }}'
+          cat > ~/.cargo/config.toml <<CONFIG
+          [registry]
+          global-credential-providers = ["cargo:token"]
+          CONFIG
+
+      - name: Install cargo-release
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-release
+          version: 0.25.10
+
+      - name: Publish Crates
+        run: |
+          CRATES_TO_PUBLISH=$(echo '${{ inputs.CARGO_PACKAGES }}' | xargs -n1 echo -n ' --package')
+          cargo release publish $CRATES_TO_PUBLISH --registry ${{ inputs.CARGO_REGISTRY_ALIAS }} --no-confirm --no-verify --execute
+
+  bump-version:
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    needs: tag
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.name }}
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2.7.3
+        with:
+          shared-key: build
+
+      - name: Install cargo-release
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-release
+          version: 0.25.10
+
+      - name: Prepare next beta version
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          cargo release beta --no-publish --no-push --no-tag --workspace --no-confirm -v --execute
+
+          # The cargo release beta command performs a commit for us but with a generic message.
+          # So we amend the commit with a more descriptive message.
+          NEW_VERSION=$(cargo xtask docker image version)
+          git commit --amend -m "[skip ci] Prepare next development version $NEW_VERSION"
+          git push origin main

@@ -1,0 +1,115 @@
+name: Update Image Digest
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  update-image-digest:
+    runs-on: ubuntu-latest
+    concurrency:
+      # cancel-in-progress: true will pre-emptively cancel old jobs if a new update comes in
+      # FYI: push/rebase below retries for 1 minute allowing for concurrent runs of this
+      group: "${{ github.event.client_payload.directory_name }}-${{ github.event.client_payload.environment_dir }}"
+      cancel-in-progress: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: "main"
+
+      - name: Update image digest for Infra-Eks Managed Clusters (via SSH Auth)
+        run: |
+          export RUNTIME_DIRECTORY="kubernetes"
+          mkdir -p ${{ github.workspace }}/${RUNTIME_DIRECTORY}/${{ github.event.client_payload.directory_name }}/${{ github.event.client_payload.environment_dir }}
+          curl -s -o install_kustomize.sh "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"
+          chmod +x ./install_kustomize.sh; 
+          ./install_kustomize.sh 5.1.0
+          sudo mv kustomize /usr/local/bin/kustomize
+          cd ${{ github.workspace }}/${RUNTIME_DIRECTORY}/${{ github.event.client_payload.directory_name }}/${{ github.event.client_payload.environment_dir }}
+          if [ ! -f kustomization.yaml ]; then cat > kustomization.yaml << EndOfMessage
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+
+          resources:
+            - git@github.com:${{github.repository_owner}}/${{ github.event.client_payload.resource_directory_name || github.event.client_payload.directory_name }}/.platform/kubernetes/${{ github.event.client_payload.environment_dir }}
+          EndOfMessage
+          fi
+          kustomize edit set image ${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server=naxgrp.jfrog.io/${{github.repository_owner}}-docker-local/applications/${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server@${{ github.event.client_payload.digest }}
+          kustomize edit set annotation meta.naxgrp.com/github-repository:${{github.event.client_payload.repository}}
+          git add .
+
+      - name: Update image digest for Run Studio Managed Clusters (via HTTPS Auth)
+        run: |
+          export RUNTIME_DIRECTORY="run-studio"
+          mkdir -p ${{ github.workspace }}/${RUNTIME_DIRECTORY}/${{ github.event.client_payload.directory_name }}/${{ github.event.client_payload.environment_dir }}
+          curl -s -o install_kustomize.sh "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"
+          chmod +x ./install_kustomize.sh; 
+          ./install_kustomize.sh 5.1.0
+          sudo mv kustomize /usr/local/bin/kustomize
+          cd ${{ github.workspace }}/${RUNTIME_DIRECTORY}/${{ github.event.client_payload.directory_name }}/${{ github.event.client_payload.environment_dir }}
+          if [ ! -f kustomization.yaml ]; then cat > kustomization.yaml << EndOfMessage
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+
+          resources:
+            - https://github.com/${{github.repository_owner}}/${{ github.event.client_payload.resource_directory_name || github.event.client_payload.directory_name }}/.platform/kubernetes/${{ github.event.client_payload.environment_dir }}
+          EndOfMessage
+          fi
+          if [ "${{ github.event.client_payload.registry}}" = "ecr" ]; then
+            kustomize edit set image ${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server=${{ github.event.client_payload.account_id}}.dkr.ecr.${{ github.event.client_payload.region }}.amazonaws.com/${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server@${{ github.event.client_payload.digest }}
+          else
+            kustomize edit set image ${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server=naxgrp.jfrog.io/${{github.repository_owner}}-docker-local/applications/${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server@${{ github.event.client_payload.digest }}
+          fi
+          kustomize edit set annotation meta.naxgrp.com/github-repository:${{github.event.client_payload.repository}}
+          git add .
+      - name: Create backstage components for project
+        run: |
+          export RUNTIME_DIRECTORY="run-studio"
+          mkdir -p ${{ github.workspace }}/${RUNTIME_DIRECTORY}/${{ github.event.client_payload.directory_name }}/catalog-info
+          cd ${{ github.workspace }}/${RUNTIME_DIRECTORY}/${{ github.event.client_payload.directory_name }}/catalog-info
+          cat > catalog-info.yaml << EndOfMessage
+          apiVersion: backstage.io/v1alpha1
+          kind: Component
+          metadata:
+            annotations:
+              argocd/app-selector: naxgrp.com/app=${{ github.event.client_payload.directory_name }}
+              github.com/project-slug: ${{github.repository_owner}}/${{ github.event.client_payload.directory_name }}
+              backstage.io/kubernetes-namespace: ${{ github.event.client_payload.directory_name }}
+              backstage.io/kubernetes-label-selector: naxgrp.com/app=${{ github.event.client_payload.directory_name }}
+            description: ${{ github.event.client_payload.directory_name }}
+            name: ${{ github.event.client_payload.directory_name }}            
+          spec:
+            lifecycle: production
+            owner: user:guest
+            type: website
+          EndOfMessage
+          git add .
+      - name: Update values.yaml
+        uses: fjogeleit/yaml-update-action@main
+        with:
+          valueFile: 'run-studio/${{ github.event.client_payload.directory_name }}/catalog-info/catalog-info.yaml'
+          propertyPath: "metadata.${{ github.event.client_payload.environment_dir }}Version"
+          value: ${{ github.event.client_payload.tag || github.event.client_payload.digest }}
+          commitChange: true
+          createPR: false
+          updateFile: true
+          masterBranchName: main
+          branch: main
+          targetBranch: main
+      - name: Commit Changes
+        timeout-minutes: 1
+        run: |
+          git config --global alias.pushrebase '!git pull --rebase && git push'
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git commit -am "[skip ci] Update ${{ github.event.client_payload.directory_name }} image digest to ${{ github.event.client_payload.digest }}"
+          until git pushrebase origin main; do
+            echo "Push/Rebase failed, retrying..."
+            sleep 1
+          done

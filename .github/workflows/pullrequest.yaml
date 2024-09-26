@@ -1,0 +1,143 @@
+on:
+  workflow_call:
+    secrets:
+      SSH_KEY:
+        required: true
+      SSO_URL:
+        required: true
+      ARTIFACTORY_DOCKERCONFIG:
+        required: true
+      ARGOCD_CERTIFICATE:
+        required: true
+      GRAFANA_CLIENT_ID:
+        required: true
+      GRAFANA_CLIENT_SECRET:
+        required: true
+
+name: Plan Infrastructure
+
+env:
+  TERRAFORM_VERSION: 1.2.9
+  AWS_DEFAULT_REGION: ${{ vars.AWS_REGION}}
+  AWS_REGION: ${{ vars.AWS_REGION}}
+  AWS_DEFAULT_OUTPUT: json
+  GITHUB_TOKEN: ${{ secrets.CIRCLE_CI_GITHUB_TOKEN }}
+  TF_VAR_region: ${{ vars.AWS_REGION}}
+  TF_VAR_jv: ${{ vars.TF_VAR_JV}}
+  TF_VAR_jv_short_name: ${{ vars.TF_VAR_JV }}
+  AWS_MATRIX: ${{ vars.AWS_MATRIX}}
+  TF_VAR_state_bucket: ${{ vars.TF_VAR_STATE_BUCKET }}
+  TF_VAR_grafana_client_id: ${{ secrets.GRAFANA_CLIENT_ID }}
+  TF_VAR_grafana_client_secret: ${{ secrets.GRAFANA_CLIENT_SECRET }}
+
+jobs:
+  load_matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+      - id: set-matrix
+        name: matrix
+        run: |
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "matrix<<$EOF" >> $GITHUB_OUTPUT
+          echo "{    \"include\": ${AWS_MATRIX} }"  >> $GITHUB_OUTPUT
+          echo >> $GITHUB_OUTPUT
+          echo "$EOF" >> $GITHUB_OUTPUT
+  jv:
+    if: ${{ vars.PLATFORM_TERRAFORM_ENABLED == 'true' }}
+    needs: load_matrix
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix: ${{fromJson(needs.load_matrix.outputs.matrix)}}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1.2.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - name: Configure AWS credentials for shared services account
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          # v4 control plane migration...
+          # if AWS_STATE_ACCOUNT_ID does not exist, go create it
+          # copy the value of AWS_ACCOUNT_ID from Organization-level variables
+          role-to-assume: arn:aws:iam::${{ vars.AWS_STATE_ACCOUNT_ID }}:role/GithubActionsInfraRole
+          aws-region: us-west-2
+
+      - name: Run Terraform fmt
+        id: fmt
+        working-directory: terraform
+        run: terraform fmt -check
+      - name: Run Terraform init
+        id: init
+        working-directory: terraform
+        run: |
+          eval `ssh-agent -s`
+          ssh-add - <<< '${{ secrets.SSH_KEY }}'
+          terraform init -input=false --backend-config="bucket=${TF_VAR_state_bucket}" --backend-config="key=${TF_VAR_jv}/terraform.tfstate" --backend-config="region=${TF_VAR_region}"
+          terraform workspace new "${{ matrix.env }}" || true
+          terraform workspace select "${{ matrix.env }}"
+        env:
+          TF_VAR_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+          TF_VAR_env: ${{ matrix.env }}
+
+      - name: Terraform Validate
+        id: validate
+        working-directory: terraform
+        run: terraform validate -no-color
+        env:
+          TF_VAR_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+          TF_VAR_env: ${{ matrix.env }}
+          TF_WORKSPACE: ${{ matrix.env }}
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: terraform
+        run: |
+          echo $TF_VAR_account_id
+          echo $TF_VAR_region
+          terraform plan -no-color -input=false -var="account_id=${TF_VAR_account_id}"
+        env:
+          TF_VAR_github_ssh_key: ${{ secrets.SSH_KEY }}
+          TF_VAR_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+          TF_VAR_env: ${{ matrix.env }}
+          TF_WORKSPACE: ${{ matrix.env }}
+          TF_VAR_sso_url: ${{ secrets.SSO_URL }}
+          TF_VAR_docker_json_config: ${{ secrets.ARTIFACTORY_DOCKERCONFIG }}
+          TF_VAR_argocd_certificate: ${{ secrets.ARGOCD_CERTIFICATE }}
+          TF_VAR_region: ${{ vars.AWS_REGION }}
+      - uses: actions/github-script@v6
+        if: github.event_name == 'pull_request'
+        env:
+          PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `Results for \`${{matrix.env}}\`
+            #### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+            #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+            #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+            <details><summary>Validation Output</summary>
+            \`\`\`\n
+            ${{ steps.validate.outputs.stdout }}
+            \`\`\`
+            </details>
+            #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+            <details><summary>Show Plan</summary>
+            \`\`\`\n
+            ${process.env.PLAN}
+            \`\`\`
+            </details>
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working Directory: \`${{ env.tf_actions_working_dir }}\`, Workflow: \`${{ github.workflow }}\`*`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })

@@ -1,0 +1,109 @@
+name: Deploy Static Front End Apps
+
+permissions:
+  id-token: write
+  contents: read
+
+on:
+  workflow_call:
+    secrets:
+      NPM_GITHUB_TOKEN:
+        required: true
+    inputs:
+      AWS_ACCOUNT_ID:
+        required: true
+      AWS_TFSTATE_BUCKET:
+        required: true
+
+env:
+  GITHUB_TOKEN: ${{ secrets.NPM_GITHUB_TOKEN }}
+  TERRAFORM_VERSION: 1.3.7
+  AWS_DEFAULT_REGION: us-west-2
+  AWS_REGION: us-west-2
+  AWS_DEFAULT_OUTPUT: json
+  AWS_ROLE_NAME: GithubActionsInfraRole
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: arn:aws:iam::${{ inputs.AWS_ACCOUNT_ID }}:role/${{ inputs.AWS_ROLE_NAME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check out repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1.2.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup NodeJS 16
+        uses: actions/setup-node@v1
+        with:
+          node-version: 16
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Get pnpm cache directory path
+        id: pnpm-cache-dir-path
+        run: echo "::set-output name=dir::$(pnpm config get cacheFolder)"
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v2
+        id: pnpm-cache
+        with:
+          path: |
+            ${{ steps.pnpm-cache-dir-path.outputs.dir }}
+            **\node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        if: steps.pnpm-cache.outputs.cache-hit != 'true'
+        run: pnpm install
+
+      - name: Test
+        run: |
+          RUN=CI pnpm nx affected:test --base=origin/main~1 --parallel 5
+          pnpm nx affected:lint --base=origin/main~1 --parallel 5
+
+      - name: Build
+        run: |
+          pnpm nx affected:build --base=origin/main~1 --parallel 5 --prod --with-deps
+
+      - name: Affected apps
+        run: |
+          APPS=$(pnpm nx print-affected --type=app --select=projects --base=origin/main~1 | cut -d, -f1)
+          echo "Affected applications: $APPS"
+          echo "AFFECTED_APPS=$(echo $APPS)" >> $GITHUB_ENV
+
+      - name: Provision
+        env:
+          AWS_BUCKET_NAME: ${{ inputs.AWS_TFSTATE_BUCKET }}
+        run: |
+          for APP in $AFFECTED_APPS
+          do
+            pnpm nx stack-init $APP -backend-config="key=${APP}.tfstate" -backend-config="bucket=${{ inputs.AWS_TFSTATE_BUCKET }}"
+            pnpm nx stack-validate $APP
+            pnpm nx stack-apply $APP
+          done
+
+      - name: Deploy
+        env:
+          INPUT_PLATFORMS: linux/amd64,linux/arm64
+        run: |
+          for APP in $AFFECTED_APPS
+          do
+            pnpm nx deploy $APP
+            pnpm nx invalidate $APP
+          done

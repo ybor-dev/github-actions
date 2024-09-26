@@ -1,0 +1,56 @@
+on:
+  workflow_call:
+    secrets:
+      TOKEN:
+        required: true
+    inputs:
+      target-env:
+        description: 'Target environment (stg, prd)'
+        type: string
+        required: true
+      tag:
+        description: 'Tag to promote'
+        type: string
+        required: true
+      github-actions-ref:
+        description: 'Github-Actions repository reference (default: main)'
+        type: string
+        required: false
+        default: 'main'
+
+jobs:
+  promote:
+    name: Promote Tag to ${{ inputs.target-env }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Get Digest from Release
+        id: get_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download ${{ inputs.tag }} --repo ${{ github.repository }} -p "digest.txt" -p "app.txt"
+          cat digest.txt
+          cat app.txt
+          echo "digest=$(cat digest.txt)" >> $GITHUB_OUTPUT
+          echo "app=$(cat app.txt)" >> $GITHUB_OUTPUT
+
+      - name: Trigger Update Image Digest
+        run: |
+          APP=${{ steps.get_release.outputs.app }}
+          curl -X POST \
+            -H "Accept: application/vnd.github.everest-preview+json" \
+            -H "Authorization: token ${{ secrets.TOKEN }}" \
+            ${{ vars.PLATFORM_DISPATCH_URL }} \
+            --fail-with-body \
+            -d "{\"event_type\": \"update-digest\", \"client_payload\": {\"repository\": \"${GITHUB_REPOSITORY}\", \"directory_name\": \"fe-$APP\", \"resource_directory_name\": \"$(basename ${GITHUB_REPOSITORY})/apps/$APP\", \"image_name\": \"fe-$APP\", \"environment_dir\": \"${{ inputs.target-env }}\", \"digest\": \"${{ steps.get_release.outputs.digest }}\"}}"
+
+      - name: Update github release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+            gh release view ${{ inputs.tag }} --repo ${{ github.repository }} --json body -q .body >> release_notes.md
+            echo "Released to ${{ inputs.target-env }} by @${{ github.triggering_actor }} on $(date +'%Y-%m-%d %H:%M:%S') UTC" >> release_notes.md
+            gh release edit ${{ inputs.tag }} --repo ${{ github.repository }} --notes-file release_notes.md

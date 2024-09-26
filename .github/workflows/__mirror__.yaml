@@ -1,0 +1,22 @@
+name: Mirror to nax-tech
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  mirror:
+    if: github.repository_owner == 'nax-platform'
+    runs-on: ubuntu-latest
+
+    steps:
+        - uses: actions/checkout@v3
+          with:
+            fetch-depth: 0
+        - uses: yesolutions/mirror-action@v0.7.0
+          with:
+            REMOTE: git@github.com:nax-tech/github-actions.git
+            GIT_USERNAME: cnuss
+            GIT_SSH_PRIVATE_KEY: ${{ secrets.NAX_TECH_SSH }}
+            GIT_SSH_NO_VERIFY_HOST: true

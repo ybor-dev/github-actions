@@ -1,0 +1,157 @@
+name: "Frogbot Scan Pull Request"
+
+on:
+  workflow_call:
+    secrets:
+      ARTIFACTORY_USERNAME:
+        required: true
+      ARTIFACTORY_IDENTITY_TOKEN:
+        required: true
+      JF_GIT_TOKEN:
+        required: true
+      JF_URL:
+        required: true
+#   branch_protection_rule:
+#     types: [created, edited]
+#   pull_request_target:
+#     types: [opened, synchronize]
+#   push:
+#     branches:
+#       - main
+#       - master
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  scan-pull-request:
+    runs-on: ubuntu-latest
+    environment: frogbot
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Configure Maven
+        uses: whelk-io/maven-settings-xml-action@v21
+        with:
+          servers: >
+            [
+              { "id": "central", "username": "${{ secrets.ARTIFACTORY_USERNAME }}", "password": "${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}" },
+              { "id": "snapshots", "username": "${{ secrets.ARTIFACTORY_USERNAME }}", "password": "${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}" }
+            ]
+          repositories: >
+            [
+              {
+                "id": "central",
+                "name":  "${{ github.repository_owner }}-libs-release",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "snapshots": { "enabled": "false" }
+              },
+              {
+                "id": "snapshots",
+                "name":  "${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "snapshots": { "enabled": "true" }
+              }
+            ]
+          plugin_repositories: >
+            [
+              {
+                "id": "central",
+                "name":  "${{ github.repository_owner }}-libs-release",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-release",
+                "snapshots": { "enabled": "false" }
+              },
+              {
+                "id": "snapshots",
+                "name":  "${{ github.repository_owner }}-libs-snapshot",
+                "url": "https://naxgrp.jfrog.io/artifactory/${{ github.repository_owner }}-libs-snapshot",
+                "snapshots": { "enabled": "true" }
+              }
+            ]
+      - name: Set up Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: "corretto"
+          java-version: "17"
+          cache: "maven"
+          overwrite-settings: false
+
+      - name: Frogbot by JFrog
+        uses: jfrog/frogbot@v2.11.1
+
+        env:
+          # [Mandatory]
+          # JFrog platform URL
+          JF_URL: ${{ secrets.JF_URL }}
+
+          # [Mandatory if JF_USER and JF_PASSWORD are not provided]
+          # JFrog access token with 'read' permissions on Xray service
+          JF_ACCESS_TOKEN: ${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}
+
+          # [Mandatory if JF_ACCESS_TOKEN is not provided]
+          # JFrog username with 'read' permissions for Xray. Must be provided with JF_PASSWORD
+          # JF_USER: ${{ secrets.ARTIFACTORY_USERNAME }}
+
+          # [Mandatory if JF_ACCESS_TOKEN is not provided]
+          # JFrog password. Must be provided with JF_USER
+          # JF_PASSWORD:
+
+          # [Mandatory]
+          # The GitHub token automatically generated for the job
+          JF_GIT_TOKEN: ${{ secrets.JF_GIT_TOKEN }}
+
+          # [Optional, default: https://api.github.com]
+          # API endpoint to GitHub
+          # JF_GIT_API_ENDPOINT: https://github.example.com
+
+          # [Optional]
+          # If the machine that runs Frogbot has no access to the internet, set the name of a remote repository
+          # in Artifactory, which proxies https://releases.jfrog.io
+          # The 'frogbot' executable and other tools it needs will be downloaded through this repository.
+          # JF_RELEASES_REPO: ""
+
+          ##########################################################################
+          ##   If your project uses a 'frogbot-config.yml' file, you can define   ##
+          ##   the following variables inside the file, instead of here.          ##
+          ##########################################################################
+
+          # [Optional, default: "."]
+          # Relative path to the root of the project in the Git repository
+          # JF_WORKING_DIR: path/to/project/dir
+
+          # [Optional]
+          # Xray Watches. Learn more about them here: https://www.jfrog.com/confluence/display/JFROG/Configuring+Xray+Watches
+          # JF_WATCHES: <watch-1>,<watch-2>...<watch-n>
+
+          # [Optional]
+          # JFrog project. Learn more about it here: https://www.jfrog.com/confluence/display/JFROG/Projects
+          # JF_PROJECT: <project-key>
+
+          # [Optional, default: "FALSE"]
+          # Displays all existing vulnerabilities, including the ones that were added by the pull request.
+          JF_INCLUDE_ALL_VULNERABILITIES: "TRUE"
+
+          # [Optional, default: "TRUE"]
+          # Fails the Frogbot task if any security issue is found.
+          # JF_FAIL: "FALSE"
+
+          # [Optional]
+          # Frogbot will download the project dependencies if they're not cached locally. To download the
+          # dependencies from a virtual repository in Artifactory, set the name of the repository. There's no
+          # need to set this value, if it is set in the frogbot-config.yml file.
+          # JF_DEPS_REPO: ""
+
+          # [Optional, Default: "FALSE"]
+          # If TRUE, Frogbot creates a single pull request with all the fixes.
+          # If FALSE, Frogbot creates a separate pull request for each fix.
+          # JF_GIT_AGGREGATE_FIXES: "FALSE"
+
+          # [Optional, Default: "FALSE"]
+          # Handle vulnerabilities with fix versions only
+          # JF_FIXABLE_ONLY: "TRUE"
+
+          # [Optional]
+          # Set the minimum severity for vulnerabilities that should be fixed and commented on in pull requests
+          # The following values are accepted: Low, Medium, High or Critical
+          JF_MIN_SEVERITY: "Medium"

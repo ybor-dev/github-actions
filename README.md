@@ -1,5 +1,5 @@
 # github-actions
-This repository is managed by the Ybor Platform Team in order to provide Github Actions templates. This allows Ybor's Platform Team to improve the pipelines over time and seamlessly integrate updates into the respective projects.
+This repository is managed by the P6m Dev Team in order to provide Github Actions templates. This allows P6m's Dev Team to improve the pipelines over time and seamlessly integrate updates into the respective projects.
 
 ## Example
 
@@ -15,7 +15,7 @@ on:
   
 jobs:
   build_and_deploy:
-    uses: ybor-platform/github-actions/.github/workflows/build-deploy-maven.yaml@main
+    uses: p6m-dev/github-actions/.github/workflows/build-deploy-maven.yaml@main
     secrets:
       ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
       ARTIFACTORY_IDENTITY_TOKEN: ${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}

@@ -41,7 +41,7 @@ jobs:
             - https://github.com/${{github.repository_owner}}/workflow-templates/.platform/kubernetes/${{ github.event.client_payload.environment_dir }}
           EndOfMessage
           fi
-          kustomize edit set image ${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server=ybor.jfrog.io/${{github.repository_owner}}-docker-local/applications/${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server@${{ github.event.client_payload.digest }}
+          kustomize edit set image ${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server=p6m.jfrog.io/${{github.repository_owner}}-docker-local/applications/${{ github.event.client_payload.image_name || github.event.client_payload.directory_name }}-server@${{ github.event.client_payload.digest }}
           git add .
       - name: Commit Changes
         timeout-minutes: 1

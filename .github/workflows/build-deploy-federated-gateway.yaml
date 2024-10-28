@@ -129,7 +129,7 @@ jobs:
         uses: docker/metadata-action@v4
         with:
           images: |
-            p6m.jfrog.io/${{ vars.TF_VAR_JV_PROJECT }}-${{ vars.TF_VAR_JV_NAME }}-docker-local/applications/${{ github.event.repository.name }}-server
+            p6m.jfrog.io/${{ github.repository_owner }}-docker-local/applications/${{ github.event.repository.name }}-server
           tags: |
             type=ref,event=branch
             type=ref,event=pr

@@ -124,7 +124,7 @@ jobs:
 
       - name: Affected apps
         run: |
-          APPS=$(pnpm nx show projects --affected --type app --base=origin/main~1 | cut -d, -f1)
+          APPS=$(pnpm nx show projects --affected --type app --exclude docs --base=origin/main~1 | cut -d, -f1)
           echo "Affected applications: $APPS"
           echo "AFFECTED_APPS=$(echo $APPS)" >> $GITHUB_ENV
 

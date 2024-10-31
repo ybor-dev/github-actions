@@ -95,7 +95,7 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_GITHUB_ACTION_ROLE_ARN }}
           role-session-name: docker-build
-          aws-region: us-west-2
+          aws-region: us-east-2
       - uses: aws-actions/amazon-ecr-login@v1
       - uses: int128/create-ecr-repository-action@v1
         id: ecr
@@ -145,4 +145,4 @@ jobs:
             -H "Authorization: token ${{ secrets.UPDATE_MANIFEST_TOKEN }}" \
             ${{ vars.PLATFORM_DISPATCH_URL }} \
             --fail-with-body \
-            -d "{\"event_type\": \"update-digest\", \"client_payload\": {\"repository\": \"${GITHUB_REPOSITORY}\", \"registry\": \"ecr\", \"account_id\": \"${{ vars.AWS_ACCOUNT_ID }}\", \"region\": \"us-west-2\", \"directory_name\": \"$(basename ${GITHUB_REPOSITORY})\", \"environment_dir\": \"dev\", \"digest\": \"${{ steps.build-push.outputs.digest }}\"}}"
+            -d "{\"event_type\": \"update-digest\", \"client_payload\": {\"repository\": \"${GITHUB_REPOSITORY}\", \"registry\": \"ecr\", \"account_id\": \"${{ vars.AWS_ACCOUNT_ID }}\", \"region\": \"us-east-2\", \"directory_name\": \"$(basename ${GITHUB_REPOSITORY})\", \"environment_dir\": \"dev\", \"digest\": \"${{ steps.build-push.outputs.digest }}\"}}"

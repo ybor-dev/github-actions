@@ -1,0 +1,200 @@
+name: Build & Deploy (.NET Service)
+
+on:
+  workflow_call:
+    outputs:
+      digest:
+        description: "The docker image digest for the built image"
+        value: ${{ jobs.tag_version.outputs.digest }}
+      tag_name:
+        description: "Git Tag Name"
+        value: ${{ jobs.tag_version.outputs.tag_name }}
+    secrets:
+      ARTIFACTORY_USERNAME:
+        description: The username to use to authenticate with the Docker registry.
+        required: true
+      ARTIFACTORY_IDENTITY_TOKEN:
+        description: The password to use to authenticate with the Docker registry.
+        required: true
+
+      UPDATE_MANIFEST_TOKEN:
+        description: The token to use to push the new image digest to the .platform repo.
+        required: true
+    inputs:
+      MODE:
+        description: Release or Debug mode
+        type: string
+        required: false
+        default: release
+      ARTIFACTORY_REGISTRY:
+        description: The hostname of the Docker registry as you would enter it for the `docker login` command.
+        type: string
+        required: false
+        default: p6m.jfrog.io
+      ARTIFACTORY_REPO:
+        description: Artifactory repository name.
+        type: string
+        required: true
+      DOCKER_IMAGE_NAME:
+        description: "The namespaced Docker image name."
+        type: string
+        required: true
+      DOCKER_CONTEXT:
+        description: The path to the Docker context to build.
+        type: string
+        default: '.'
+        required: false
+      DOCKERFILE:
+        description: The absolute path to the Dockerfile to build.
+        type: string
+        default: './Dockerfile'
+        required: false
+
+
+jobs:
+  tag_version:
+    name: Create Tag & Build
+    outputs:
+      tag_name: ${{ steps.TAG.outputs.tag_name }}
+      tag_value: ${{ steps.TAG.outputs.value }}
+      digest: ${{ steps.docker_build.outputs.digest }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Required for Multi-arch builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      ##########
+
+      # Set up .NET SDK
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: 8.0
+
+      - name: Login to Docker Repository
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.ARTIFACTORY_REGISTRY }}
+          username: ${{ secrets.ARTIFACTORY_USERNAME }}
+          password: ${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}
+
+      - name: Install xmlstarlet
+        run: sudo apt-get install -y xmlstarlet
+
+      - name: Get TAG version
+        id: TAG
+        run: |
+          version=$(xmlstarlet sel -t -v "//Version" Directory.Build.props)
+          echo "release_version=$version"
+          echo "release_version=$version" >> $GITHUB_OUTPUT
+          echo "tag_name=v$version"
+          echo "tag_name=v$version" >> $GITHUB_OUTPUT
+
+      - name: Commit & Tag Version
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag -a ${{ steps.TAG.outputs.tag_name }} -m "Release ${{ steps.TAG.outputs.value }}"
+          git push origin ${{ steps.TAG.outputs.tag_name }}
+
+      - name: Build and Publish
+        run: dotnet publish -c Release 
+
+
+#      - name: Run tests
+#        run: dotnet test -c Release --no-build --verbosity normal 
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            ${{ inputs.ARTIFACTORY_REGISTRY }}/${{ inputs.ARTIFACTORY_REPO }}/${{ inputs.DOCKER_IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
+            type=raw,value={{ steps.TAG.outputs.release_version}},enable=${{ github.event_name != 'pull_request' }}
+            type=schedule,pattern=latest
+            type=sha
+
+      - name: Docker Build and Push
+        id: docker_build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.DOCKER_CONTEXT }}
+          file: ${{ inputs.DOCKERFILE }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Increment version
+        id: increment_version
+        run: |
+          # Split version into components
+          IFS='.' read -ra VERSION_PARTS <<< "${{ steps.TAG.outputs.release_version }}"
+          MAJOR=${VERSION_PARTS[0]}
+          MINOR=${VERSION_PARTS[1]}
+          PATCH=${VERSION_PARTS[2]}
+
+          # Determine which part to increment based on input
+          if [ "${{ github.event.inputs.release_type }}" == "major" ]; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          elif [ "${{ github.event.inputs.release_type }}" == "minor" ]; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
+
+          # Construct the new version
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "New version: $NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update version in Directory.Build.props
+        run: |
+          xmlstarlet ed --inplace -u "//Version" -v "${{ steps.increment_version.output.new_version }}" Directory.Build.props
+          cat Directory.Build.props  # Print to verify the update
+
+      - name: Commit incremented version
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .
+          git commit -am "Prepare next version ${{ steps.increment_version.output.new_version }}"
+          git push origin main
+
+      - name: Record Summary
+        run: |
+          echo "### Docker Tags" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY  
+
+      - name: Prepare Artifact
+        run: |
+          echo "${{ steps.docker_build.outputs.digest }}" >> digest.txt
+
+      - uses: ncipollo/release-action@v1.12.0
+        with:
+          name: Version ${{ steps.TAG.outputs.release_version }}
+          tag: ${{ steps.TAG.outputs.tag_name }}
+          makeLatest: true
+          artifacts: "digest.txt"
+          removeArtifacts: true
+          generateReleaseNotes: true
+          body: |
+            Maven version: `${{ steps.TAG.outputs.release_version }}`
+            Docker image digest: `${{ steps.TAG.outputs.release_version }}`
+  

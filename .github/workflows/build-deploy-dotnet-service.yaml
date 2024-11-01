@@ -127,6 +127,7 @@ jobs:
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY  
  
   trigger-cd:
+    name: Trigger CD
     if: github.ref_name == 'main'
     runs-on: ubuntu-latest
     needs: build

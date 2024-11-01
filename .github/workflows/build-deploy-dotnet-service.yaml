@@ -27,11 +27,14 @@ on:
         description: The hostname of the Docker registry as you would enter it for the `docker login` command.
         type: string
         required: true
-      DOCKER_IMAGE_NAME:
-        description: "The namespaced Docker image name. Example: `docker push -t ${ARTIFACTORY_REGISTRY}/${DOCKER_IMAGE_NAME}:latest`"
+      ARTIFACTORY_REPO:
+        description: Artifactory repository name.
         type: string
-        default: ${{ github.repository }}
-        required: false
+        required: true
+      DOCKER_IMAGE_NAME:
+        description: "The namespaced Docker image name. Example: `docker push -t  ${{ inputs.ARTIFACTORY_REGISTRY }}/${{ inputs.ARTIFACTORY_REPO }}/${{ inputs.DOCKER_IMAGE_NAME }}:latest`"
+        type: string
+        required: true
       DOCKER_CONTEXT:
         description: The path to the Docker context to build.
         type: string
@@ -97,7 +100,7 @@ jobs:
         uses: docker/metadata-action@v4
         with:
           images: |
-            ${{ inputs.ARTIFACTORY_REGISTRY }}/${{ inputs.DOCKER_IMAGE_NAME }}/${{ inputs.APPS }}-server
+            ${{ inputs.ARTIFACTORY_REGISTRY }}/${{ inputs.ARTIFACTORY_REPO }}/${{ inputs.DOCKER_IMAGE_NAME }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr

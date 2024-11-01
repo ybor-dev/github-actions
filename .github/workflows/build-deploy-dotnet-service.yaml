@@ -101,7 +101,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=raw,value=latest,enable=${{ is_default_branch }}
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
             type=schedule,pattern=latest
             type=sha
 

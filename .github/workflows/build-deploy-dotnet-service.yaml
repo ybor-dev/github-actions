@@ -27,6 +27,11 @@ on:
         description: The hostname of the Docker registry as you would enter it for the `docker login` command.
         type: string
         required: true
+      DOCKER_IMAGE_NAME:
+        description: "The namespaced Docker image name. Example: `docker push -t ${ARTIFACTORY_REGISTRY}/${DOCKER_IMAGE_NAME}:latest`"
+        type: string
+        default: ${{ github.repository }}
+        required: false
       DOCKER_CONTEXT:
         description: The path to the Docker context to build.
         type: string

@@ -79,7 +79,7 @@ jobs:
 
       - name: Build
         run: |
-          pnpm nx affected:build --base=origin/main~1 --parallel 5 --prod --with-deps
+          pnpm nx affected:build --base=origin/main~1 --parallel 5 --prod
 
       - name: Affected apps
         run: |

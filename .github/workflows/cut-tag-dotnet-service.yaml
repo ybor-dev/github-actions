@@ -96,6 +96,7 @@ jobs:
         run: |
           dotnet restore
           dotnet build -c Release --no-restore
+          dotnet publish -c Release -o ./publish
 
       - name: Get TAG version
         id: TAG

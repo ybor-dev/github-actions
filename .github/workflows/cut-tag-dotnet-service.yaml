@@ -100,7 +100,7 @@ jobs:
       - name: Get TAG version
         id: TAG
         run: |
-          version=$(xmlstarlet sel -t -v "//Version" Directory.Build.props)
+          version=$(xmlstarlet sel -t -v "//VersionPrefix" Directory.Build.props)
           echo "release_version=$version"
           echo "release_version=$version" >> $GITHUB_OUTPUT
           echo "tag_name=v$version"
@@ -178,7 +178,7 @@ jobs:
 
       - name: Update version in Directory.Build.props
         run: |
-          xmlstarlet ed --inplace -u "//Version" -v "${{ steps.increment_version.outputs.new_version }}" Directory.Build.props
+          xmlstarlet ed --inplace -u "//VersionPrefix" -v "${{ steps.increment_version.outputs.new_version }}" Directory.Build.props
           cat Directory.Build.props  # Print to verify the update
 
       - name: Commit incremented version

@@ -79,13 +79,11 @@ jobs:
           username: ${{ secrets.ARTIFACTORY_USERNAME }}
           password: ${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}
 
-      # Restore dependencies
-      - name: Restore dependencies
-        run: dotnet restore
-
       # Build the application
       - name: Build the application
-        run: dotnet build -c Release --no-restore
+        run: |
+          dotnet restore
+          dotnet build -c Release --no-restore
 
       # Run tests
 #      - name: Run tests

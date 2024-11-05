@@ -58,19 +58,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Required for Multi-arch builds
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      ##########
 
-      # Set up .NET SDK
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: 8.0
+
+      - name: Add Artifactory NuGet source
+        run: dotnet nuget add source --name "Artifactory" --source "https://p6m.jfog.io/artifactory/api/nuget/ybor-playground-nuget" --username "${{ secrets.ARTIFACTORY_USERNAME }}" --password "${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}"
 
       - name: Login to Docker Repository
         uses: docker/login-action@v3
@@ -91,6 +91,13 @@ jobs:
 #      - name: Run tests
 #        run: dotnet test -c Release --no-build --verbosity normal  
 
+      - name: Pack and push packages to Artifactory
+        run: |
+          dotnet pack --configuration Release -o ./artifacts
+          for package in ./artifacts/*.nupkg; do
+            dotnet nuget push "$package" --source "Artifactory" --api-key "${{ secrets.ARTIFACTORY_IDENTITY_TOKEN }}"
+          done
+      
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v4

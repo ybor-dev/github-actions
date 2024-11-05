@@ -83,7 +83,8 @@ jobs:
       - name: Build the application
         run: |
           dotnet restore
-          dotnet build -c Release --no-restore
+          dotnet build -c Release --no-restore --version-suffix ${{ github.run_number }}
+          dotnet publish -c Release --version-suffix ${{ github.run_number }} -o ./publish
 
       # Run tests
 #      - name: Run tests

@@ -86,9 +86,8 @@ jobs:
           dotnet build -c Release --no-restore --version-suffix ${{ github.run_number }}
           dotnet publish -c Release --version-suffix ${{ github.run_number }} -o ./publish
 
-      # Run tests
-#      - name: Run tests
-#        run: dotnet test -c Release --no-build --verbosity normal  
+      - name: Run tests
+        run: dotnet test -c Release --version-suffix ${{ github.run_number }} --no-build --verbosity normal  
 
       - name: Pack and push packages to Artifactory
         run: |

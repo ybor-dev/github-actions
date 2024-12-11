@@ -168,7 +168,7 @@ jobs:
 
       - name: Archive code coverage results
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: reports
           path: apps/${{ inputs.app }}/reports
@@ -217,7 +217,7 @@ jobs:
 
       - name: Download code coverage results
         if: always()
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           name: reports
           path: apps/${{ inputs.app }}/reports
@@ -234,14 +234,14 @@ jobs:
 
       - name: Archive junit report
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: junit-report
           path: apps/${{ inputs.app }}/reports/junit-report.xml
 
       - name: Archive code coverage results
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: test-report
           path: public

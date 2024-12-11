@@ -102,7 +102,7 @@ jobs:
           pnpm nx affected:lint --base=origin/main~1 --parallel 5
       
       - name: Archive code coverage results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: unit-tests-report
           path: coverage

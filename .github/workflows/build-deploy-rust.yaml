@@ -75,8 +75,9 @@ jobs:
       # Required for cross-compilation
       - name: Install cross-compilers
         run: |
+          dpkg --add-architecture aarch64
           sudo apt update
-          sudo apt install -y gcc-aarch64-linux-gnu
+          sudo apt install -y gcc-aarch64-linux-gnu libssl-dev:arm64
           rustup target add aarch64-unknown-linux-gnu
       ###
 
@@ -109,8 +110,8 @@ jobs:
           CARGO_INCREMENTAL: "1"
         run: |
           if [ "${{ inputs.MODE }}" = "release" ]; then
-            cargo build --release
             cargo build --release --target=aarch64-unknown-linux-gnu
+            cargo build --release
           else
             cargo build
             cargo build --target=aarch64-unknown-linux-gnu

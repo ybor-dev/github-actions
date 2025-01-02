@@ -12,9 +12,6 @@ on:
       DOCKER_PASSWORD:
         description: The password to use to authenticate with the Docker registry.
         required: true
-      CARGO_TOKEN:
-        description: The token to use to authenticate with the Cargo registry.
-        required: true
     inputs:
       MODE:
         description: Release or Debug mode
@@ -40,16 +37,6 @@ on:
         type: string
         default: './Dockerfile'
         required: false
-      CARGO_REGISTRY_ALIAS:
-        description: The alias of the Cargo registry to publish to as specified in the .cargo/config file of the repo.
-        type: string
-        required: false
-        default: 'crates-io' # Default to the public registry
-      CARGO_PACKAGES:
-        description: A space-separated list of Cargo libraries/packages to publish.
-        type: string
-        required: false
-        default: ''
       DO_VERSION_BUMP:
         description: A value indication whether to bump the version as the final step or not.
         type: boolean
@@ -64,55 +51,65 @@ jobs:
     outputs:
       VERSION: ${{ steps.pkg-version.outputs.VERSION }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-gnu
 
     steps:
-      - uses: actions/checkout@v3
-
-      # Required for Multi-arch builds
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      ##########
-
-      - name: Login to Docker Repository
-        uses: docker/login-action@v2
-        with:
-          registry: ${{ inputs.DOCKER_REGISTRY }}
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+      - uses: actions/checkout@v4
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2.7.3
+        with:
+          key: ${{ matrix.target }}
 
-      - name: Login to Cargo Repository
-        run: |
-          cargo login --registry ${{ inputs.CARGO_REGISTRY_ALIAS }} 'Bearer ${{ secrets.CARGO_TOKEN }}'
-          cat > ~/.cargo/config.toml <<CONFIG
-          [registry]
-          global-credential-providers = ["cargo:token"]
-          CONFIG
-
-      - name: Install cargo-release
+      - name: Install rust cross
         uses: baptiste0928/cargo-install@v3
         with:
-          crate: cargo-release
-          version: 0.25.10
+          crate: cross
+          git: https://github.com/cross-rs/cross
 
       - name: Cargo build Release
         env:
           CARGO_INCREMENTAL: "1"
         run: |
           if [ "${{ inputs.MODE }}" = "release" ]; then
-            cargo build --release
+            cross build --release --target=${{ matrix.target }}
           else
-            cargo build
+            cross build --target=${{ matrix.target }}
           fi
 
       - name: Get Package Version
         id: pkg-version
-        run: echo ::set-output name=VERSION::$(cargo xtask pkg-version)
+        run: echo "VERSION=$(cargo xtask pkg-version)" >> $GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: targets-${{ matrix.target }}
+          path: ./target
+
+  deploy-image:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: target
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to Docker Repo
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Docker meta
         id: meta
@@ -124,7 +121,7 @@ jobs:
             type=ref,event=branch
             type=ref,event=pr
             type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
-            type=raw,value=${{ steps.pkg-version.outputs.VERSION }},enable=${{ github.event_name != 'pull_request' }}
+            type=raw,value=${{ needs.build.outputs.VERSION }},enable=${{ github.event_name != 'pull_request' }}
             type=sha
 
       - name: Build and push
@@ -139,31 +136,40 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            MODE=${{ inputs.MODE }}
 
       - name: Record Summary
         run: |
           echo "### Docker Tags" >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-      - name: Publish Crates
-        if: ${{ github.event_name != 'pull_request' }}
-        run: |
-          CRATES_TO_PUBLISH=$(echo '${{ inputs.CARGO_PACKAGES }}' | xargs -n1 echo -n ' --package')
-          cargo release publish $CRATES_TO_PUBLISH --registry ${{ inputs.CARGO_REGISTRY_ALIAS }} --no-confirm --no-verify -v --execute
 
+  bump-version:
+    if: ${{ inputs.DO_VERSION_BUMP && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - deploy-image
+
+    steps:
+      - uses: actions/checkout@v4
       - name: Tag and Push
-        if: ${{ github.event_name != 'pull_request' }}
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
-          git tag -a ${{ steps.pkg-version.outputs.VERSION }} -m "Release ${{ steps.pkg-version.outputs.VERSION }}"
-          git push origin ${{ steps.pkg-version.outputs.VERSION }}
+          git tag -a ${{ needs.build.outputs.VERSION }} -m "Release ${{ needs.build.outputs.VERSION }}"
+          git push origin ${{ needs.build.outputs.VERSION }}
+
+      - name: Install cargo-release
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-release
+          version: 0.25.10
 
       - name: Bump Version
-        if: ${{ inputs.DO_VERSION_BUMP && github.event_name != 'pull_request' }}
         run: cargo release version patch -x --no-confirm --workspace
 
       - name: Commit and Push
-        if: ${{ inputs.DO_VERSION_BUMP && github.event_name != 'pull_request' }}
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com

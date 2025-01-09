@@ -25,7 +25,7 @@ jobs:
       matrix: ${{ steps.subgraph-matrix.outputs.matrix }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Identify subgraph config
         uses: mikefarah/yq@master
@@ -53,7 +53,7 @@ jobs:
         run: echo '${{ toJSON(matrix) }}'
 
       - name: Pull subgraph files
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.SUBGRAPH_PULL_TOKEN }}
           repository: ${{ matrix.org }}/${{ matrix.repo }}
@@ -84,9 +84,6 @@ jobs:
           token: ${{ secrets.REPOSITORY_PUSH_TOKEN }}
 
       # Required for Multi-arch builds
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
       ##########
@@ -143,7 +140,7 @@ jobs:
         id: build-push
         with:
           context: .
-          platforms: linux/amd64  #,linux/arm64
+          platforms: linux/amd64, linux/arm64
           pull: true
           push: true
           tags: ${{ steps.meta.outputs.tags }}
